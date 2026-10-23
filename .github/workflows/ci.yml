@@ -1,0 +1,42 @@
+name: validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.7-alpine
+        env:
+          POSTGRES_USER: zecathon_test
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: zecathon_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U zecathon_test -d zecathon_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.14.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test
+      - run: pnpm test:postgres
+        env:
+          POSTGRES_TEST_URL: postgresql://zecathon_test:ci_only_password@127.0.0.1:5432/zecathon_test
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm privacy:scan
+      - run: pnpm security:gate
+      - run: docker build -t zecathon:${{ github.sha }} .

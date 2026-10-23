@@ -6,9 +6,14 @@
   "packageManager": "pnpm@10.33.4",
   "scripts": {
     "dev": "vite --host 127.0.0.1",
+    "dev:api": "node --experimental-strip-types server/app-server.ts",
+    "start": "node --experimental-strip-types server/app-server.ts",
+    "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "node --experimental-strip-types --test src/lib/catalogue.test.ts src/lib/route-policy.test.mjs src/lib/order-coordinator.test.ts src/lib/receipt.test.ts server/rpc-client.test.ts server/base-sepolia-verifier.test.ts server/zcash-verifier.test.ts server/zcash-source-config.test.ts server/zcash-source-wallet.test.ts server/zcash-address-allocator.test.ts server/operator-config.test.ts server/operator-control.test.ts server/operator-preflight.test.ts server/order-api.test.ts && node scripts/verify-readonly.mjs",
+    "test": "node --experimental-strip-types --test src/lib/catalogue.test.ts src/lib/route-policy.test.mjs src/lib/order-coordinator.test.ts src/lib/receipt.test.ts src/lib/agent-capabilities.test.ts src/lib/i18n.test.ts server/rpc-client.test.ts server/base-sepolia-verifier.test.ts server/zcash-verifier.test.ts server/zcash-source-config.test.ts server/zcash-source-wallet.test.ts server/zcash-address-allocator.test.ts server/operator-config.test.ts server/operator-control.test.ts server/operator-preflight.test.ts server/order-api.test.ts server/app-server.test.ts server/verifier-service.test.ts server/postgres.integration.test.ts && node scripts/verify-readonly.mjs",
+    "test:server": "node --experimental-strip-types --test server/app-server.test.ts",
+    "test:postgres": "node --experimental-strip-types --test server/postgres.integration.test.ts",
     "test:zcash-live": "ZCASH_RPC_LIVE=1 node --experimental-strip-types --test --test-name-pattern='live Experiment 03' server/zcash-verifier.test.ts",
     "operator": "node --experimental-strip-types scripts/operator.ts",
     "privacy:scan": "node scripts/privacy-scan.mjs",
@@ -16,13 +21,14 @@
     "import:catalogue": "node scripts/import-catalogue.mjs ../../experiments/asset-audit/near-tokens.json"
   },
   "dependencies": {
-    "@rhea-finance/zcash-wallet-adapter": "link:../../references/noir-adapter",
+    "lucide-react": "^0.468.0",
+    "pg": "^8.23.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1",
-    "lucide-react": "^0.468.0"
+    "react-dom": "^19.1.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",

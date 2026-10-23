@@ -1,0 +1,15 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+node_modules
+dist
+*.log
+*.bak
+*.tsbuildinfo
+data
+private
+operator-data
+deploy/secrets
+scripts/zecathon_*.py

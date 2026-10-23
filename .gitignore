@@ -32,3 +32,5 @@ scripts/zecathon_inspect_deposit_route.py
 # Never vendor adjacent wallets, experiments, or reference repositories.
 experiments/
 references/
+deploy/secrets/
+backups/
