@@ -1,0 +1,34 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+# Local operator state and credentials must never enter source control.
+.operator/
+operator-data/
+private/
+data/
+*.cookie
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.journal
+*.pem
+*.key
+*.seed
+*.mnemonic
+keys.toml
+
+# Local recovery/editor artifacts and raw experiments are not application source.
+*.bak
+scripts/zecathon_near_dry_quote_audit.py
+scripts/zecathon_inspect_deposit_route.py
+
+# Never vendor adjacent wallets, experiments, or reference repositories.
+experiments/
+references/
