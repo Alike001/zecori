@@ -125,7 +125,7 @@ switch (command) {
     requireInteractiveTerminal();
     if (await exists(defaultSourceWalletConfigPath())) throw new Error('Wallet A configuration already exists and will not be overwritten');
     requireInteractiveConfirmation(options.confirm, 'CONFIGURE EXISTING TESTNET WALLET A');
-    await createSourceWalletConfig({ rpcUrl: required(options.rpc, 'Wallet A RPC URL'), dataDir: required(options['data-dir'], 'Wallet A data directory') });
+    await createSourceWalletConfig({ rpcUrl: required(options.rpc, 'Wallet A RPC URL'), dataDir: required(options['data-dir'], 'Wallet A data directory'), walletName: required(options['wallet-name'], 'Wallet A name') });
     print({ stage: 'SOURCE_WALLET_CONFIGURED', network: 'zcash-testnet', rpc: '127.0.0.1:18392', existingWalletOnly: true, walletStarted: false, cookieStored: false, secretsDisplayed: false });
     break;
   }

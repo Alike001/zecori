@@ -3,13 +3,52 @@ import type { BaseSepoliaErc20Receipt } from '../src/lib/read-only-verification.
 import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
 
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
-export const BASE_SEPOLIA_RPC = 'https://base-sepolia-rpc.publicnode.com';
+export const DEFAULT_BASE_SEPOLIA_RPC = 'https://sepolia.base.org';
+export const BASE_SEPOLIA_RPC = DEFAULT_BASE_SEPOLIA_RPC;
+export const BASE_RPC_TIMEOUT_MS = 6_000;
 export const BASE_REFERENCE_TRANSACTION = '0xd8297f03c23141ea01b5095ff789d1cdbaf19abce42fb6244fe5c5a433574f39';
 export const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
 
 type Log = { address?: string; topics?: string[]; data?: string; removed?: boolean; transactionHash?: string; blockHash?: string };
 type TransactionReceipt = { status?: string; blockHash?: string; blockNumber?: string; transactionHash?: string; logs?: Log[] };
 type Block = { hash?: string; number?: string; transactions?: Array<string | { hash?: string }> };
+
+export function baseSepoliaRpcUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.BASE_SEPOLIA_RPC_URL?.trim() || DEFAULT_BASE_SEPOLIA_RPC;
+  let endpoint: URL;
+  try { endpoint = new URL(configured); } catch { throw new Error('BASE_SEPOLIA_RPC_URL is invalid'); }
+  if (endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.hash) throw new Error('Base Sepolia RPC must be an HTTPS URL without embedded credentials or a fragment');
+  return endpoint.toString();
+}
+
+export function baseSepoliaRpc(env: NodeJS.ProcessEnv = process.env): RpcCall {
+  return jsonRpcClient(baseSepoliaRpcUrl(env), { timeoutMs: BASE_RPC_TIMEOUT_MS });
+}
+
+export type BaseRpcHealth = { chainId: number; contract: string; contractPresent: boolean; latestBlock: string; latestBlockHash: string };
+
+export async function checkBaseSepoliaRpcHealth(rpc: RpcCall = baseSepoliaRpc()): Promise<BaseRpcHealth> {
+  const firstChain = quantity(await rpc<string>('eth_chainId'), 'chain ID');
+  if (firstChain !== BigInt(BASE_SEPOLIA_CHAIN_ID)) throw new Error('Base RPC is not Base Sepolia');
+  const latest = await rpc<string>('eth_blockNumber');
+  const [code, block, secondChainHex] = await Promise.all([
+    rpc<string>('eth_getCode', [BASE_USDC, 'latest']),
+    rpc<Block | null>('eth_getBlockByNumber', [latest, false]),
+    rpc<string>('eth_chainId'),
+  ]);
+  const secondChain = quantity(secondChainHex, 'chain ID');
+  if (secondChain !== firstChain) throw new Error('Base RPC chain identity changed during health check');
+  const latestNumber = quantity(latest, 'latest block');
+  if (!block || quantity(block.number, 'returned block number') !== latestNumber || !block.hash || !/^0x[0-9a-f]{64}$/i.test(block.hash)) {
+    throw new Error('Base RPC returned mismatched latest-chain data');
+  }
+  if (!/^0x[0-9a-f]+$/i.test(code) || code === '0x') throw new Error('Official Circle test-USDC contract code is unavailable on Base Sepolia');
+  return {
+    chainId: Number(firstChain), contract: BASE_USDC,
+    contractPresent: true,
+    latestBlock: latestNumber.toString(), latestBlockHash: block.hash.toLowerCase(),
+  };
+}
 
 export type BaseVerificationRequest = {
   orderId: string;
@@ -45,7 +84,7 @@ export async function verifyBaseSepoliaTransaction(
     throw new Error('Historical reference transaction cannot settle an order');
   }
 
-  const rpc = options.rpc ?? jsonRpcClient(BASE_SEPOLIA_RPC);
+  const rpc = options.rpc ?? baseSepoliaRpc();
   const chainId = quantity(await rpc<string>('eth_chainId'), 'chain ID');
   if (chainId !== BigInt(BASE_SEPOLIA_CHAIN_ID)) throw new Error('RPC is not Base Sepolia');
 

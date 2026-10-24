@@ -44,7 +44,8 @@ export function parseJsonPreservingIntegers(text: string): unknown {
       const match = text.slice(index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/);
       if (!match) throw new Error('Invalid JSON number');
       const token = match[0];
-      if (/^-?\d+$/.test(token) && (BigInt(token) > BigInt(Number.MAX_SAFE_INTEGER) || BigInt(token) < BigInt(Number.MIN_SAFE_INTEGER))) output += JSON.stringify(token);
+      if (token.includes('.') || /[eE]/.test(token)) output += JSON.stringify(token);
+      else if (BigInt(token) > BigInt(Number.MAX_SAFE_INTEGER) || BigInt(token) < BigInt(Number.MIN_SAFE_INTEGER)) output += JSON.stringify(token);
       else output += token;
       index += token.length;
       continue;

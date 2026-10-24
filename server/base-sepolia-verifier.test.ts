@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { BASE_REFERENCE_TRANSACTION, ERC20_TRANSFER_TOPIC, verifyBaseSepoliaTransaction } from './base-sepolia-verifier.ts';
+import { baseSepoliaRpcUrl, BASE_REFERENCE_TRANSACTION, checkBaseSepoliaRpcHealth, ERC20_TRANSFER_TOPIC, verifyBaseSepoliaTransaction } from './base-sepolia-verifier.ts';
 import { BASE_USDC } from '../src/lib/order-coordinator.ts';
 import type { RpcCall } from './rpc-client.ts';
 
@@ -57,6 +57,40 @@ test('rejects duplicate matching outputs and the historical reference in product
   };
   await assert.rejects(verifyBaseSepoliaTransaction({ orderId: 'order-1', transactionId: txid, recipient, amountAtomic: '1000000' }, { rpc: rpc({ receipt: duplicateReceipt }) }), /Exactly one/);
   await assert.rejects(verifyBaseSepoliaTransaction({ orderId: 'order-1', transactionId: BASE_REFERENCE_TRANSACTION, recipient, amountAtomic: '1000000' }, { rpc: rpc() }), /Historical reference/);
+});
+
+test('validates a configured HTTPS Base endpoint without silently changing networks', () => {
+  assert.equal(baseSepoliaRpcUrl({ BASE_SEPOLIA_RPC_URL: 'https://rpc.example/base-sepolia' }), 'https://rpc.example/base-sepolia');
+  assert.equal(baseSepoliaRpcUrl({}), 'https://sepolia.base.org/');
+  assert.throws(() => baseSepoliaRpcUrl({ BASE_SEPOLIA_RPC_URL: 'http://rpc.example' }), /HTTPS/);
+  assert.throws(() => baseSepoliaRpcUrl({ BASE_SEPOLIA_RPC_URL: 'https://user:secret@rpc.example' }), /credentials/);
+});
+
+test('Base health check binds chain identity to matching latest block data', async () => {
+  const healthy: RpcCall = async <T>(method: string) => ({
+    eth_chainId: '0x14a34', eth_blockNumber: '0x64', eth_getCode: '0x6001',
+    eth_getBlockByNumber: { number: '0x64', hash: `0x${'1'.repeat(64)}` },
+  }[method] as T);
+  const result = await checkBaseSepoliaRpcHealth(healthy);
+  assert.equal(result.chainId, 84532);
+  assert.equal(result.latestBlock, '100');
+  await assert.rejects(checkBaseSepoliaRpcHealth(async <T>(method: string) => ({
+    eth_chainId: '0x1', eth_blockNumber: '0x64', eth_getCode: '0x6001',
+    eth_getBlockByNumber: { number: '0x64', hash: `0x${'1'.repeat(64)}` },
+  }[method] as T)), /not Base Sepolia/);
+  await assert.rejects(checkBaseSepoliaRpcHealth(async <T>(method: string) => ({
+    eth_chainId: '0x14a34', eth_blockNumber: '0x64', eth_getCode: '0x6001',
+    eth_getBlockByNumber: { number: '0x63', hash: `0x${'1'.repeat(64)}` },
+  }[method] as T)), /mismatched/);
+  await assert.rejects(checkBaseSepoliaRpcHealth(async <T>(method: string) => ({
+    eth_chainId: '0x14a34', eth_blockNumber: '0x64', eth_getCode: '0x',
+    eth_getBlockByNumber: { number: '0x64', hash: `0x${'1'.repeat(64)}` },
+  }[method] as T)), /contract code/);
+  let chainCalls = 0;
+  await assert.rejects(checkBaseSepoliaRpcHealth(async <T>(method: string) => {
+    if (method === 'eth_chainId') return (++chainCalls === 1 ? '0x14a34' : '0x1') as T;
+    return ({ eth_blockNumber: '0x64', eth_getCode: '0x6001', eth_getBlockByNumber: { number: '0x64', hash: `0x${'1'.repeat(64)}` } }[method]) as T;
+  }), /changed/);
 });
 
 test('read-only live reference transaction integration', { skip: process.env.BASE_RPC_LIVE !== '1' }, async () => {

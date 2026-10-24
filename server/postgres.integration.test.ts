@@ -32,12 +32,12 @@ async function reserveTestAllocation(
 function allocationRpc(address: string, index: string, behavior: { derive?: () => void; fail?: Error; wrongIndex?: string } = {}): RpcCall {
   return async <T>(method: string) => {
     if (method === 'getblockchaininfo') return { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false } as T;
-    if (method === 'getwalletinfo') return { scanning: false, enhanced_through: 500, unlocked_until: 0 } as T;
+    if (method === 'getwalletinfo') return { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 } as T;
     if (method === 'z_listtransactions') return [] as T;
     if (method === 'getaddressinfo') return { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: index } as T;
     if (method === 'z_getaddressforaccount') {
       behavior.derive?.(); if (behavior.fail) throw behavior.fail;
-      return { address, diversifier_index: behavior.wrongIndex ?? index, receiver_types: ['orchard'] } as T;
+      return { account: 0, address, diversifier_index: behavior.wrongIndex ?? index, receiver_types: ['orchard'] } as T;
     }
     throw new Error(`Unexpected RPC method ${method}`);
   };
@@ -137,6 +137,7 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
   const encryption = new DataEncryption({ activeVersion: 17, keys: new Map([[17, randomBytes(32)]]) });
   const requests = new PostgresPublicOrderRequestStore(pool, encryption); const store = new PostgresSettlementStore(pool, encryption);
   const operatorId = 'allocation-integration'; const signature = 'd'.repeat(64);
+  const allocationIndexBase = 10_000_000_000_000_000_000n + BigInt(`0x${randomBytes(8).toString('hex')}`) * 100n;
   const verify = async (_domain: string, _payload: string, provided: string) => { if (provided !== signature) throw new Error('forged operator authorization'); };
   const accepted = async (now = Date.now()) => {
     const owner = randomUUID(); const request = await requests.create(owner, `0x${randomBytes(20).toString('hex')}`, now);
@@ -147,7 +148,7 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
 
   const crashPoints = ['afterJournal', 'afterRpcStart', 'afterDerivation', 'afterDerivedRecord', 'afterReservation'] as const;
   for (let number = 0; number < crashPoints.length; number += 1) {
-    const scenario = await accepted(); const index = `${900719925474099300000n + BigInt(number)}`;
+    const scenario = await accepted(); const index = (allocationIndexBase + BigInt(number)).toString();
     const address = `utest1${randomBytes(32).toString('hex')}`; let derivations = 0;
     await assert.rejects(executePostgresAddressAllocation({
       store, orderId: scenario.request.id, authorizationId: scenario.authorizationId, operatorId, verifyAuthorization: verify,
@@ -165,7 +166,7 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
     assert.equal(derivations, crashPoints[number] === 'afterJournal' || crashPoints[number] === 'afterRpcStart' ? 1 : crashPoints[number] === 'afterDerivation' ? 2 : 1);
   }
 
-  const uncertain = await accepted(); const uncertainIndex = '900719925474099399991'; const uncertainAddress = `utest1${randomBytes(32).toString('hex')}`;
+  const uncertain = await accepted(); const uncertainIndex = (allocationIndexBase + 91n).toString(); const uncertainAddress = `utest1${randomBytes(32).toString('hex')}`;
   await assert.rejects(executePostgresAddressAllocation({ store, orderId: uncertain.request.id, authorizationId: uncertain.authorizationId, operatorId, verifyAuthorization: verify, diversifierIndex: uncertainIndex, rpc: allocationRpc(uncertainAddress, uncertainIndex, { fail: new Error('RPC timeout') }) }), /requires reconciliation/);
   const uncertainOperation = await store.addressAllocationOperation(uncertain.request.id, uncertain.authorizationId, operatorId);
   assert.equal(uncertainOperation.phase, 'RPC_UNCERTAIN');
@@ -173,7 +174,7 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
   assert.equal((await store.addressAllocationOperation(uncertain.request.id, uncertain.authorizationId, operatorId)).rpcAttemptCount, uncertainOperation.rpcAttemptCount);
   await executePostgresAddressAllocation({ store, orderId: uncertain.request.id, authorizationId: uncertain.authorizationId, operatorId, verifyAuthorization: verify, mode: 'RECONCILE', rpc: allocationRpc(uncertainAddress, uncertainIndex) });
 
-  const expiredOrder = await accepted(); const expiredIndex = '900719925474099399995'; const expiredAddress = `utest1${randomBytes(32).toString('hex')}`;
+  const expiredOrder = await accepted(); const expiredIndex = (allocationIndexBase + 95n).toString(); const expiredAddress = `utest1${randomBytes(32).toString('hex')}`;
   await assert.rejects(executePostgresAddressAllocation({
     store, orderId: expiredOrder.request.id, authorizationId: expiredOrder.authorizationId, operatorId, verifyAuthorization: verify,
     diversifierIndex: expiredIndex, rpc: allocationRpc(expiredAddress, expiredIndex), hooks: { afterDerivedRecord: () => { throw new Error('TEST-ONLY wait past order expiry'); } },
@@ -184,19 +185,19 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
   await store.expire(expiredOrder.request.id, afterOrderExpiry);
   assert.equal((await requests.get(expiredOrder.owner, expiredOrder.request.id))?.status, 'FAILED');
 
-  const concurrent = await accepted(); const concurrentIndex = '900719925474099399992'; const concurrentAddress = `utest1${randomBytes(32).toString('hex')}`;
+  const concurrent = await accepted(); const concurrentIndex = (allocationIndexBase + 92n).toString(); const concurrentAddress = `utest1${randomBytes(32).toString('hex')}`;
   const results = await Promise.allSettled(Array.from({ length: 2 }, () => executePostgresAddressAllocation({ store, orderId: concurrent.request.id, authorizationId: concurrent.authorizationId, operatorId, verifyAuthorization: verify, diversifierIndex: concurrentIndex, rpc: allocationRpc(concurrentAddress, concurrentIndex) })));
   assert.ok(results.some(item => item.status === 'fulfilled'));
   assert.equal((await store.addressAllocationOperation(concurrent.request.id, concurrent.authorizationId, operatorId)).phase, 'RESERVED');
 
-  const cancellable = await accepted(); const cancelIndex = '900719925474099399993';
+  const cancellable = await accepted(); const cancelIndex = (allocationIndexBase + 93n).toString();
   const cancelOperation = await store.beginAddressAllocation(cancellable.request.id, operatorId, cancellable.authorizationId, cancelIndex, verify);
   await store.cancelAddressAllocation(cancellable.request.id, cancellable.authorizationId, operatorId, verify, 'operator abandoned before RPC', cancellable.now + 120_000);
   assert.equal((await store.addressAllocationOperation(cancellable.request.id, cancellable.authorizationId, operatorId)).phase, 'CANCELLED');
   assert.equal(cancelOperation.rpcAttemptCount, 0);
 
   const forged = await accepted();
-  await assert.rejects(store.beginAddressAllocation(forged.request.id, operatorId, forged.authorizationId, '900719925474099399994', async () => { throw new Error('forged operator authorization'); }), /forged/);
+  await assert.rejects(store.beginAddressAllocation(forged.request.id, operatorId, forged.authorizationId, (allocationIndexBase + 94n).toString(), async () => { throw new Error('forged operator authorization'); }), /forged/);
   assert.equal((await pool.query('SELECT count(*)::int AS count FROM address_allocation_journal WHERE order_id=$1', [forged.request.id])).rows[0].count, 0);
 
   const raw = await pool.query<{ encrypted_derivation: Buffer; encrypted_receiver: Buffer; details: Record<string, unknown> }>(`SELECT j.encrypted_derivation,j.encrypted_receiver,a.details FROM address_allocation_journal j JOIN audit_events a ON a.order_id=j.order_id WHERE j.order_id=$1 ORDER BY a.event_id DESC LIMIT 1`, [uncertain.request.id]);

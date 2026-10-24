@@ -5,7 +5,7 @@ This is a future approval sequence, not authorization to run it. Commands contai
 ## Current findings
 
 - Wallet A configuration validation accepts only an existing mode-`0700`, non-symlink data directory with mode-`0600` `default/keys.toml`, testnet loopback RPC at exactly `127.0.0.1:18392`, and never Wallet B's path.
-- The Wallet A health check is read-only: `getblockchaininfo`, `getwalletinfo`, and `z_getbalanceforaccount 0 10`. It requires testnet sync, complete enhanced history, an encrypted locked wallet, exactly ten-confirmation balance policy, and at least `1,010,000` zatoshis (`1,000,000` payment plus `10,000` fee reserve).
+- The Wallet A health check uses the pinned `zecd v0.9.0-rc2` RPC surface: `getblockchaininfo`, `getwalletinfo`, `getbalance "*" 10`, and `listunspent 10 9999999 [] false`. `z_getbalanceforaccount` does not exist in that release. Aggregate balance is only a consistency check: readiness requires at least `1,010,000` zatoshis in safe, spendable, ten-confirmation `ironwood` notes alone. Transparent, Sapling, and Orchard value is reported but never counted as FullPrivacy-compatible funding.
 - The active PostgreSQL operator CLI now implements the guarded derivation bridge. It commits an encrypted exact-diversifier journal before the only `z_getaddressforaccount` call, validates the returned owned Orchard-only Unified Address and payment history, then binds it transactionally to one immutable order.
 - The legacy JSON allocator is fail-closed. PostgreSQL is the only production allocation authority.
 - An RPC timeout, disconnect, process crash, or expired in-progress authorization retains the same journaled diversifier for `reconcile-allocation`; no replacement is selected. `cancel-allocation` is accepted only while the journal proves that no wallet RPC attempt began.
@@ -18,15 +18,16 @@ Set private environment variables in an operator-only shell without putting secr
 1. **Reference the existing Wallet A, then separately approve its start.** This creates only an application configuration reference after validating the existing private directory and `keys.toml`; it does not create, copy, import, unlock, or start a wallet:
 
    ```bash
-   WALLET_A_DATA_DIR='<ABSOLUTE_EXISTING_WALLET_A_DATA>' node --experimental-strip-types -e "import('./server/zcash-source-config.ts').then(m => m.createSourceWalletConfig({ rpcUrl: 'http://127.0.0.1:18392/', dataDir: process.env.WALLET_A_DATA_DIR }))"
+   WALLET_A_DATA_DIR='/home/ali/Desktop/zecathon/experiments/shielded-receiver/zecd-nu7/zecd-testnet-data' node --experimental-strip-types -e "import('./server/zcash-source-config.ts').then(m => m.createSourceWalletConfig({ rpcUrl: 'http://127.0.0.1:18392/', dataDir: process.env.WALLET_A_DATA_DIR, walletName: 'default' }))"
    ```
 
    Then, only after approval, start the exact pinned binary with its existing Wallet A testnet config:
 
    ```bash
    # APPROVAL REQUIRED — starts the existing spending wallet; do not run in milestone 04.
-   ../../experiments/shielded-receiver/zecd-nu7/zecd-0.9.0-rc2-linux-amd64/zecd \
-     --testnet --datadir '<ABSOLUTE_WALLET_A_DATA>' --rpcbind 127.0.0.1 --rpcport 18392 run
+   /home/ali/Desktop/zecathon/experiments/shielded-receiver/zecd-nu7/zecd-0.9.0-rc2-linux-amd64/zecd \
+     --testnet --datadir /home/ali/Desktop/zecathon/experiments/shielded-receiver/zecd-nu7/zecd-testnet-data \
+     --rpcbind 127.0.0.1 --rpcport 18392 run
    ```
 
    Confirm the configuration contains an RPC allowlist and the wallet starts locked. Do not pass a mnemonic, identity, passphrase or RPC password on the command line.
@@ -38,14 +39,15 @@ Set private environment variables in an operator-only shell without putting secr
    node --experimental-strip-types -e "import('./server/zcash-source-wallet.ts').then(async m => console.log(JSON.stringify(await m.checkSourceWalletA(), null, 2)))"
    ```
 
-   Require `sufficientForPaymentAndFeeReserve: true`, `confirmedZatoshis >= 1010000`, `locked: true`, complete history and testnet sync.
+   Require `sufficientForPaymentAndFeeReserve: true`, `fullPrivacyCompatible: true`, `ironwoodUsableZatoshis >= 1010000`, `locked: true`, `walletOwned: true`, `walletName: "default"`, complete history and testnet sync.
 
 3. **Separately approve Wallet B start and read-only health.** Reuse the existing Wallet B data directory and start it locked on its dedicated loopback port; never copy its files or export/import a UFVK:
 
    ```bash
    # APPROVAL REQUIRED — starts existing Wallet B; does not derive an address.
-   ../../experiments/shielded-receiver/zecd-nu7/zecd-0.9.0-rc2-linux-amd64/zecd \
-     --testnet --datadir '<ABSOLUTE_EXISTING_WALLET_B_DATA>' --rpcbind 127.0.0.1 --rpcport 18393 run
+   /home/ali/Desktop/zecathon/experiments/shielded-receiver/zecd-nu7/zecd-0.9.0-rc2-linux-amd64/zecd \
+     --testnet --datadir /home/ali/.local/share/zecd-wallet-b-testnet \
+     --rpcbind 127.0.0.1 --rpcport 18393 run
 
    # Read-only Wallet B network, lock, sync, and history check.
    node --experimental-strip-types -e "import('./server/operator-preflight.ts').then(async m => console.log(JSON.stringify(await m.checkZcashHealth(), null, 2)))"

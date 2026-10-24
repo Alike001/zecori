@@ -13,10 +13,10 @@ import { createOperatorOrderBinding } from '../src/lib/operator-order.ts';
 const lp = `0x${'1'.repeat(40)}`; const recipient = `0x${'2'.repeat(40)}`;
 function zcashRpc(): RpcCall { return async <T>(method: string) => ({
   getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
-  getwalletinfo: { scanning: false, enhanced_through: 500, unlocked_until: 0 },
+  getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 },
 }[method] as T); }
 function baseRpc(usdc = 1_000_000n, eth = 100_000_000_000_000n): RpcCall { return async <T>(method: string) => ({
-  eth_chainId: '0x14a34', eth_getCode: '0x6001', eth_blockNumber: '0x64', eth_call: `0x${usdc.toString(16)}`, eth_getBalance: `0x${eth.toString(16)}`,
+  eth_chainId: '0x14a34', eth_getCode: '0x6001', eth_blockNumber: '0x64', eth_getBlockByNumber: { number: '0x64', hash: `0x${'a'.repeat(64)}` }, eth_call: `0x${usdc.toString(16)}`, eth_getBalance: `0x${eth.toString(16)}`,
 }[method] as T); }
 
 test('previews exact disclosed terms without creating an order', () => {

@@ -3,8 +3,7 @@ import { createServer } from 'node:http';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
-import { BASE_SEPOLIA_CHAIN_ID, BASE_SEPOLIA_RPC, verifyBaseSepoliaTransaction, type BaseVerificationRequest } from './base-sepolia-verifier.ts';
-import { jsonRpcClient } from './rpc-client.ts';
+import { checkBaseSepoliaRpcHealth, verifyBaseSepoliaTransaction, type BaseVerificationRequest } from './base-sepolia-verifier.ts';
 
 function json(response: import('node:http').ServerResponse, status: number, value: unknown): void {
   response.statusCode = status; response.setHeader('content-type', 'application/json; charset=utf-8'); response.setHeader('cache-control', 'no-store'); response.setHeader('x-content-type-options', 'nosniff'); response.end(JSON.stringify(value));
@@ -35,7 +34,7 @@ export function createVerifierServer(expectedToken: string) {
     const path = new URL(request.url ?? '/', 'http://internal').pathname;
     if (request.method === 'GET' && path === '/health/live') return json(response, 200, { status: 'live' });
     if (request.method === 'GET' && path === '/health/ready') {
-      try { const chain = await jsonRpcClient(BASE_SEPOLIA_RPC)<string>('eth_chainId'); return json(response, BigInt(chain) === BigInt(BASE_SEPOLIA_CHAIN_ID) ? 200 : 503, { status: BigInt(chain) === BigInt(BASE_SEPOLIA_CHAIN_ID) ? 'ready' : 'wrong-chain' }); }
+      try { await checkBaseSepoliaRpcHealth(); return json(response, 200, { status: 'ready' }); }
       catch { return json(response, 503, { status: 'not-ready' }); }
     }
     const authorization = request.headers.authorization;

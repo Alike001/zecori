@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { walletBRpc } from './zcash-verifier.ts';
+import { walletBRpc, ZECD_WALLET_B_NAME } from './zcash-verifier.ts';
 import { exactJsonInteger, type RpcCall } from './rpc-client.ts';
 
 type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
-type WalletInfo = { scanning?: false | object; enhanced_through?: number | null; import_error?: unknown; unlocked_until?: number };
+type WalletInfo = { walletname?: string; private_keys_enabled?: boolean; scanning?: false | object; enhanced_through?: number | null; import_error?: unknown; unlocked_until?: number };
 type AddressInfo = { address?: string; ismine?: boolean; isvalid_orchard?: boolean; receiver_types?: string[]; receivers_consistent?: boolean; diversifier_index?: number | string };
 type HistoryEntry = { address?: string; diversifier_index?: number | string };
-type DerivedAddress = { address?: string; diversifier_index?: number | string; receiver_types?: string[] };
+type DerivedAddress = { account?: number; address?: string; diversifier_index?: number | string; receiver_types?: string[] };
 
 export type ValidatedReceivingAddress = {
   allocationId: string;
@@ -33,13 +33,14 @@ export function exactDiversifierIndex(value: number | string | undefined): strin
   return typeof value === 'string' && /^\d+$/.test(value) ? BigInt(value).toString() : undefined;
 }
 
-async function inspectWalletB(rpc: RpcCall, now: number): Promise<{ blocks: number; history: HistoryEntry[] }> {
+async function inspectWalletB(rpc: RpcCall, _now: number): Promise<{ blocks: number; history: HistoryEntry[] }> {
   const [chain, wallet] = await Promise.all([
     rpc<ChainInfo>('getblockchaininfo'), rpc<WalletInfo>('getwalletinfo'),
   ]);
   if (chain.chain !== 'test' || chain.initialblockdownload !== false || !Number.isSafeInteger(chain.blocks) || chain.blocks !== chain.headers) throw new Error('Wallet B is not synchronized on Zcash testnet');
+  if (wallet.walletname !== ZECD_WALLET_B_NAME || wallet.private_keys_enabled !== true) throw new Error('Wallet B identity or ownership does not match the configured spending wallet');
   if (wallet.scanning !== false || wallet.import_error || wallet.enhanced_through !== chain.blocks) throw new Error('Wallet B history is incomplete');
-  if (typeof wallet.unlocked_until !== 'number' || wallet.unlocked_until > Math.floor(now / 1000)) throw new Error('Wallet B must remain encrypted and locked');
+  if (wallet.unlocked_until !== 0) throw new Error('Wallet B must remain encrypted and locked');
   const history: HistoryEntry[] = [];
   for (let offset = 0; ; offset += 100) {
     if (offset >= 1_000_000) throw new Error('Wallet B history exceeds the safe allocation scan limit');
@@ -66,7 +67,7 @@ export async function deriveExactOrchardAddress(diversifierIndex: string, rpc: R
   if (exact === undefined) throw new Error('Journaled diversifier index is invalid');
   const derived = await rpc<DerivedAddress>('z_getaddressforaccount', [0, ['orchard'], exactJsonInteger(exact)]);
   const returnedIndex = exactDiversifierIndex(derived.diversifier_index);
-  if (!derived.address || !/^utest1[a-z0-9]+$/.test(derived.address) || returnedIndex !== exact
+  if (derived.account !== 0 || !derived.address || !/^utest1[a-z0-9]+$/.test(derived.address) || returnedIndex !== exact
     || derived.receiver_types?.length !== 1 || derived.receiver_types[0] !== 'orchard') {
     throw new Error('Derived address response does not match the journaled Orchard allocation');
   }

@@ -9,10 +9,10 @@ function rpc(history: unknown[] = [], overrides: Record<string, unknown> = {}): 
   const methods: string[] = [];
   const values: Record<string, unknown> = {
     getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
-    getwalletinfo: { scanning: false, enhanced_through: 500, unlocked_until: 0 },
+    getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 },
     getaddressinfo: { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: '42' },
     z_listtransactions: history,
-    z_getaddressforaccount: { address, diversifier_index: '42', receiver_types: ['orchard'] },
+    z_getaddressforaccount: { account: 0, address, diversifier_index: '42', receiver_types: ['orchard'] },
     ...overrides,
   };
   return { methods, call: async <T>(method: string) => { methods.push(method); return values[method] as T; } };
@@ -31,7 +31,8 @@ test('checks an exact unused diversifier before journaling and derives only that
   const derived = await deriveExactOrchardAddress('42', mock.call);
   assert.deepEqual(derived, { address, diversifierIndex: '42' });
   await assert.rejects(validateUnusedWalletBDiversifier('42', { rpc: rpc([{ diversifier_index: '42' }]).call }), /prior wallet payment history/);
-  await assert.rejects(deriveExactOrchardAddress('42', rpc([], { z_getaddressforaccount: { address, diversifier_index: '43', receiver_types: ['orchard'] } }).call), /does not match/);
+  await assert.rejects(deriveExactOrchardAddress('42', rpc([], { z_getaddressforaccount: { account: 0, address, diversifier_index: '43', receiver_types: ['orchard'] } }).call), /does not match/);
+  await assert.rejects(deriveExactOrchardAddress('42', rpc([], { z_getaddressforaccount: { account: 1, address, diversifier_index: '42', receiver_types: ['orchard'] } }).call), /does not match/);
 });
 
 test('validates a fresh owned Orchard-only address and records a future-height boundary', async () => {
@@ -48,5 +49,6 @@ test('rejects prior history, wrong ownership, wrong pool shape and unlocked wall
   await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([{ address, diversifier_index: '42' }]).call }), /prior wallet history/);
   await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([], { getaddressinfo: { address, ismine: false, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: '42' } }).call }), /not an owned/);
   await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([], { getaddressinfo: { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard', 'p2pkh'], receivers_consistent: true, diversifier_index: '42' } }).call }), /Orchard-only/);
-  await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([], { getwalletinfo: { scanning: false, enhanced_through: 500, unlocked_until: Math.floor(Date.now() / 1000) + 60 } }).call }), /locked/);
+  await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([], { getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: Math.floor(Date.now() / 1000) + 60 } }).call }), /locked/);
+  await assert.rejects(validateUnusedWalletBAddress(address, { rpc: rpc([], { getwalletinfo: { walletname: 'other', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 } }).call }), /identity/);
 });

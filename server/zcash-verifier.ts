@@ -7,6 +7,7 @@ import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
 
 export const ZECD_WALLET_B_RPC = 'http://127.0.0.1:18393/';
 export const ZECD_WALLET_B_DATA = join(homedir(), '.local', 'share', 'zecd-wallet-b-testnet');
+export const ZECD_WALLET_B_NAME = 'default';
 
 type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
 type WalletInfo = { scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; private_keys_enabled?: boolean; unlocked_until?: number };

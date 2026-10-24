@@ -7,6 +7,15 @@ test('preserves arbitrary-precision response integers as exact decimal strings',
   assert.equal(parsed.result.diversifier_index, '309485009821345068724781055');
 });
 
+test('preserves decimal JSON numbers as strings before floating-point conversion', () => {
+  const parsed = parseJsonPreservingIntegers('{"result":{"amount":0.01010000,"scientific":1e-8,"height":42}}') as {
+    result: { amount: string; scientific: string; height: number };
+  };
+  assert.equal(parsed.result.amount, '0.01010000');
+  assert.equal(parsed.result.scientific, '1e-8');
+  assert.equal(parsed.result.height, 42);
+});
+
 test('serializes an explicit arbitrary-precision RPC integer without quotes', async () => {
   let body = '';
   const original = globalThis.fetch;

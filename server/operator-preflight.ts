@@ -2,11 +2,11 @@ import { access, stat } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { dirname } from 'node:path';
 import { BASE_USDC, FIXED_RATE, isFullEvmAddress, TRUSTED_PROVIDER_ID } from '../src/lib/order-coordinator.ts';
-import { BASE_SEPOLIA_CHAIN_ID, BASE_SEPOLIA_RPC } from './base-sepolia-verifier.ts';
+import { baseSepoliaRpc, checkBaseSepoliaRpcHealth, type BaseRpcHealth } from './base-sepolia-verifier.ts';
 import { FileOrderStore } from './order-api.ts';
 import { inspectOperatorKey, OperatorControlStore } from './operator-control.ts';
-import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
-import { walletBRpc } from './zcash-verifier.ts';
+import type { RpcCall } from './rpc-client.ts';
+import { walletBRpc, ZECD_WALLET_B_NAME } from './zcash-verifier.ts';
 
 const BALANCE_OF_SELECTOR = '70a08231';
 export const MINIMUM_GAS_WEI = 100_000_000_000_000n;
@@ -23,38 +23,34 @@ function balanceOfData(address: string): string {
 }
 
 export type ZcashHealth = {
-  network: 'zcash-testnet'; synchronized: boolean; locked: boolean; historyComplete: boolean; blocks: number;
+  network: 'zcash-testnet'; synchronized: boolean; locked: boolean; historyComplete: boolean; walletOwned: true; walletName: string; blocks: number;
 };
 
 export async function checkZcashHealth(rpc?: RpcCall): Promise<ZcashHealth> {
   const call = rpc ?? await walletBRpc();
   const [chain, wallet] = await Promise.all([
     call<{ chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean }>('getblockchaininfo'),
-    call<{ scanning?: false | object; enhanced_through?: number | null; import_error?: unknown; unlocked_until?: number }>('getwalletinfo'),
+    call<{ walletname?: string; private_keys_enabled?: boolean; scanning?: false | object; enhanced_through?: number | null; import_error?: unknown; unlocked_until?: number }>('getwalletinfo'),
   ]);
   if (chain.chain !== 'test' || !Number.isSafeInteger(chain.blocks)) throw new Error('Wallet B is not on Zcash testnet');
+  if (wallet.walletname !== ZECD_WALLET_B_NAME || wallet.private_keys_enabled !== true) throw new Error('Wallet B identity or ownership mismatch');
   return {
-    network: 'zcash-testnet', blocks: chain.blocks as number,
+    network: 'zcash-testnet', blocks: chain.blocks as number, walletOwned: true, walletName: ZECD_WALLET_B_NAME,
     synchronized: chain.initialblockdownload === false && chain.blocks === chain.headers,
     historyComplete: wallet.scanning === false && !wallet.import_error && wallet.enhanced_through === chain.blocks,
-    locked: typeof wallet.unlocked_until === 'number' && wallet.unlocked_until <= Math.floor(Date.now() / 1000),
+    locked: wallet.unlocked_until === 0,
   };
 }
 
-export type BaseHealth = { chainId: number; contract: string; contractPresent: boolean; latestBlock: string };
+export type BaseHealth = BaseRpcHealth;
 
-export async function checkBaseHealth(rpc: RpcCall = jsonRpcClient(BASE_SEPOLIA_RPC)): Promise<BaseHealth> {
-  const [chain, code, latest] = await Promise.all([
-    rpc<string>('eth_chainId'), rpc<string>('eth_getCode', [BASE_USDC, 'latest']), rpc<string>('eth_blockNumber'),
-  ]);
-  const chainId = quantity(chain, 'chain ID');
-  if (chainId !== BigInt(BASE_SEPOLIA_CHAIN_ID)) throw new Error('Base RPC is not Base Sepolia');
-  return { chainId: Number(chainId), contract: BASE_USDC, contractPresent: /^0x[0-9a-f]+$/i.test(code) && code !== '0x', latestBlock: quantity(latest, 'latest block').toString() };
+export async function checkBaseHealth(rpc?: RpcCall): Promise<BaseHealth> {
+  return checkBaseSepoliaRpcHealth(rpc);
 }
 
 export type LiquidityHealth = { usdcAtomic: string; ethWei: string; sufficientUsdc: boolean; sufficientGas: boolean };
 
-export async function checkLiquidity(lpAddress: string, rpc: RpcCall = jsonRpcClient(BASE_SEPOLIA_RPC)): Promise<LiquidityHealth> {
+export async function checkLiquidity(lpAddress: string, rpc: RpcCall = baseSepoliaRpc()): Promise<LiquidityHealth> {
   if (!isFullEvmAddress(lpAddress)) throw new Error('Operator-confirmed LP address is missing or invalid');
   const [token, gas] = await Promise.all([
     rpc<string>('eth_call', [{ to: BASE_USDC, data: balanceOfData(lpAddress) }, 'latest']),
