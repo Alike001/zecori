@@ -20,6 +20,9 @@ function fail(error: unknown): void {
 process.on('uncaughtException', fail);
 process.on('unhandledRejection', fail);
 
+process.stderr.write('Legacy JSON operator mutations are disabled. Use `pnpm operator -- help` for the PostgreSQL settlement CLI. Existing JSON files were not changed.\n');
+process.exit(2);
+
 function argumentsMap(values: string[]): { command?: string; options: Record<string, string> } {
   const [command, ...rest] = values; const options: Record<string, string> = {};
   for (let index = 0; index < rest.length; index += 2) {

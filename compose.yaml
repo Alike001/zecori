@@ -35,7 +35,8 @@ services:
       DB_NAME: zecathon
       DB_USER: zecathon
       DB_PASSWORD_FILE: /run/secrets/db_password
-    secrets: [db_password]
+      ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
+    secrets: [db_password, encryption_keyring]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 15s
@@ -103,3 +104,5 @@ secrets:
     file: ./deploy/secrets/db_password
   verifier_token:
     file: ./deploy/secrets/verifier_token
+  encryption_keyring:
+    file: ./deploy/secrets/encryption-keyring.json

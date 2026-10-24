@@ -8,6 +8,7 @@ import { PostgresPublicOrderRequestStore } from './public-order-store.ts';
 import { createPostgresPool } from './postgres.ts';
 import { publicApi } from './public-api.ts';
 import { isFullEvmAddress } from '../src/lib/order-coordinator.ts';
+import { loadEncryptionKeyring } from './data-encryption.ts';
 
 export type ApplicationServerOptions = {
   store: PublicOrderRequestStore;
@@ -113,7 +114,8 @@ async function start(): Promise<void> {
   if (process.env.NODE_ENV === 'production' && (parsedOrigin.protocol !== 'https:' || process.env.TRUST_PROXY !== '1')) throw new Error('Production requires an HTTPS PUBLIC_ORIGIN and TRUST_PROXY=1');
   if (!isFullEvmAddress(recipient) || /^0x0{40}$/i.test(recipient)) throw new Error('ROUTE_DESTINATION_RECIPIENT must be a non-zero complete Base address');
   const pool = createPostgresPool();
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool), publicOrigin, destinationRecipient: recipient, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
+  const encryption = await loadEncryptionKeyring();
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), publicOrigin, destinationRecipient: recipient, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

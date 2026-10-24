@@ -9,15 +9,23 @@ function navigate(path: string): void { window.history.pushState({}, '', path); 
 function short(value: string): string { return `${value.slice(0, 8)}…${value.slice(-6)}`; }
 function label(value: string): string { return value.split('_').map(word => word[0] + word.slice(1).toLowerCase()).join(' '); }
 
-const stages = ['Request reviewed', 'Payment instructions', 'Zcash confirmed', 'Payout approved', 'Base verified'];
+const stages = ['Operator review', 'Payment instructions', 'Source verification', 'Payout review', 'Destination verification', 'Verified receipt'];
+
+const stageByStatus: Record<PublicOrderRequest['status'], number> = {
+  AWAITING_OPERATOR: 0, ACCEPTED: 1, PAYMENT_READY: 1, SOURCE_DETECTED: 2, SOURCE_CONFIRMED: 3,
+  PAYOUT_AWAITING_APPROVAL: 3, PAYOUT_SUBMITTED: 4, COMPLETED: 6, FAILED: 0, REFUND_PENDING: 2,
+  REFUNDED: 2, UNRESOLVED: 2, EXPIRED: 0, CANCELLED: 0,
+};
 
 function RequestCard({ request, onRefresh }: { request: PublicOrderRequest; onRefresh: () => void }) {
-  const stage = request.status === 'AWAITING_OPERATOR' ? 0 : request.status === 'PAYMENT_READY' ? 1 : request.status === 'LINKED' ? 2 : 0;
+  const stage = stageByStatus[request.status];
   return <section className="panel request-card" aria-live="polite">
     <div className="panel-top"><span className="section-label">YOUR PAYMENT REQUEST</span><span className={`status-chip status-${request.status.toLowerCase()}`}>{label(request.status)}</span></div>
     <div className="request-id"><span>Request ID</span><code>{request.id}</code><button className="icon-button" onClick={onRefresh} aria-label="Refresh request status"><RefreshCw size={16}/></button></div>
-    <ol className="timeline">{stages.map((item, index) => <li className={index <= stage ? 'reached' : ''} key={item}><span>{index < stage ? <Check size={14}/> : index + 1}</span><div><strong>{item}</strong><small>{index === 0 ? 'A trusted operator must accept and bind this exact request.' : index === 1 ? 'Shown only after a fresh shielded receiver is durably reserved.' : 'Requires independent network evidence.'}</small></div></li>)}</ol>
-    {request.paymentInstructions ? <div className="payment-instructions"><strong>Shielded testnet payment receiver</strong><code>{request.paymentInstructions.receiver}</code><p>Send exactly 0.01 TAZ before {new Date(request.paymentInstructions.expiresAt).toLocaleString()}. Confirm source-wallet funding separately before paying.</p></div> : <div className="waiting"><Clock3 size={18}/><div><strong>No payment address yet</strong><p>Do not send funds. The operator has not completed the separately authorized allocation.</p></div></div>}
+    <ol className="timeline">{stages.map((item, index) => <li className={index < stage ? 'reached' : ''} key={item}><span>{index < stage ? <Check size={14}/> : index + 1}</span><div><strong>{item}</strong><small>{index === 0 ? 'A trusted operator must accept and sign this exact request.' : index === 1 ? 'Shown only after a shielded receiver is independently validated and durably reserved.' : 'Requires an operator-controlled transition and independent network evidence.'}</small></div></li>)}</ol>
+    {request.paymentInstructions ? <div className="payment-instructions"><strong>Shielded testnet payment receiver</strong><code>{request.paymentInstructions.receiver}</code><p>Send exactly 0.01 TAZ before {new Date(request.paymentInstructions.expiresAt).toLocaleString()}. Confirm source-wallet funding separately before paying.</p></div> : <div className="waiting"><Clock3 size={18}/><div><strong>No payment address yet</strong><p>Do not send funds. The operator has not completed the independently validated allocation.</p></div></div>}
+    {request.order?.resolutionReason && <div className="inline-warning"><CircleAlert size={17}/><span>{request.order.resolutionReason}</span></div>}
+    {request.timeline?.length ? <details><summary>Observable transaction timeline</summary><ol className="event-timeline">{request.timeline.map((event, index) => <li key={`${event.at}-${index}`}><strong>{label(event.type)}</strong><small>{new Date(event.at).toLocaleString()} · {label(event.actor)}</small></li>)}</ol></details> : null}
   </section>;
 }
 
@@ -53,7 +61,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { const handler = () => setRoute(window.location.pathname); window.addEventListener('popstate', handler); return () => window.removeEventListener('popstate', handler); }, []);
   useEffect(() => { void Promise.all([getCapabilities(), listOrderRequests()]).then(([next, history]) => { setCapabilities(next); setRequests(history); }).catch(caught => setError(caught instanceof Error ? caught.message : 'Service unavailable')); }, []);
-  const active = useMemo(() => requests.find(item => ['AWAITING_OPERATOR', 'PAYMENT_READY', 'LINKED'].includes(item.status)), [requests]);
+  const active = useMemo(() => requests.find(item => !['COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED', 'CANCELLED'].includes(item.status)), [requests]);
   async function create() { setBusy(true); setError(null); try { const request = await createOrderRequest(); setRequests(items => [request, ...items.filter(item => item.id !== request.id)]); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Request failed'); } finally { setBusy(false); } }
   async function refresh() { if (!active) return; setBusy(true); try { const history = await listOrderRequests(); setRequests(history); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Refresh failed'); } finally { setBusy(false); } }
   if (route === '/history') return <History requests={requests}/>;

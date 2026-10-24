@@ -174,6 +174,28 @@ export class OperatorControlStore {
     if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) throw new Error('Operator order manifest signature is invalid');
   }
 
+  async signReceipt(canonicalReceipt: string): Promise<string> {
+    const key = await operatorKey(this.keyPath);
+    return createHmac('sha256', key).update(`zecathon-receipt-v1\n${canonicalReceipt}`).digest('hex');
+  }
+
+  async verifyReceipt(canonicalReceipt: string, signature: string): Promise<void> {
+    if (!/^[0-9a-f]{64}$/i.test(signature)) throw new Error('Receipt authenticity signature is invalid');
+    const expected = Buffer.from(await this.signReceipt(canonicalReceipt), 'hex'); const provided = Buffer.from(signature, 'hex');
+    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) throw new Error('Receipt authenticity signature is invalid');
+  }
+
+  async signOperatorPayload(domain: 'allocation-authorization-v1' | 'payout-authorization-v1', canonicalPayload: string): Promise<string> {
+    const key = await operatorKey(this.keyPath);
+    return createHmac('sha256', key).update(`zecathon-${domain}\n${canonicalPayload}`).digest('hex');
+  }
+
+  async verifyOperatorPayload(domain: 'allocation-authorization-v1' | 'payout-authorization-v1', canonicalPayload: string, signature: string): Promise<void> {
+    if (!/^[0-9a-f]{64}$/i.test(signature)) throw new Error('Operator authorization signature is invalid');
+    const expected = Buffer.from(await this.signOperatorPayload(domain, canonicalPayload), 'hex'); const provided = Buffer.from(signature, 'hex');
+    if (expected.length !== provided.length || !timingSafeEqual(expected, provided)) throw new Error('Operator authorization signature is invalid');
+  }
+
   async authorize(input: { action: OperatorAction; target: string; operatorId: string; orderBinding?: OperatorOrderBinding; diversifierIndex?: string; ttlSeconds?: number; now?: number }): Promise<string> {
     return this.exclusive(async () => {
       const key = await operatorKey(this.keyPath);

@@ -9,13 +9,15 @@ export type PublicRouteTerms = {
 
 export type PublicOrderRequest = {
   id: string;
-  status: 'AWAITING_OPERATOR' | 'PAYMENT_READY' | 'LINKED' | 'EXPIRED' | 'CANCELLED';
+  status: 'AWAITING_OPERATOR' | 'ACCEPTED' | 'PAYMENT_READY' | 'SOURCE_DETECTED' | 'SOURCE_CONFIRMED' | 'PAYOUT_AWAITING_APPROVAL' | 'PAYOUT_SUBMITTED' | 'COMPLETED' | 'FAILED' | 'REFUND_PENDING' | 'REFUNDED' | 'UNRESOLVED' | 'EXPIRED' | 'CANCELLED';
   createdAt: string;
   expiresAt: string;
   destinationRecipient: string;
   terms: PublicRouteTerms;
   linkedOrderId?: string;
   paymentInstructions?: { receiver: string; expiresAt: string };
+  order?: { finalReceiptId?: string; resolutionReason?: string };
+  timeline?: Array<{ type: string; at: string; actor: string; details: Record<string, unknown> }>;
 };
 
 export type PublicCapabilities = {

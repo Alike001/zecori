@@ -19,11 +19,16 @@ cp .env.example .env
 mkdir -p deploy/secrets
 openssl rand -hex 32 > deploy/secrets/db_password
 openssl rand -hex 32 > deploy/secrets/verifier_token
+node -e "const {randomBytes}=require('node:crypto'); process.stdout.write(JSON.stringify({activeVersion:1,keys:{1:randomBytes(32).toString('base64')}})+'\\n')" > deploy/secrets/encryption-keyring.json
 chmod 700 deploy/secrets
-chmod 600 deploy/secrets/db_password deploy/secrets/verifier_token .env
+sudo chown 10001:10001 deploy/secrets/db_password deploy/secrets/verifier_token deploy/secrets/encryption-keyring.json
+chmod 400 deploy/secrets/db_password deploy/secrets/verifier_token deploy/secrets/encryption-keyring.json
+chmod 600 .env
 ```
 
 Set `DOMAIN` and the public Base Sepolia receiver in `.env`. Never place wallet cookies, wallet keys, seed material, operator HMAC keys, or database passwords in `.env` or Git.
+
+UID/GID `10001` is the pinned unprivileged `zecathon` user inside the image. Local Docker Compose secrets are bind mounts, so the host files must be readable by that numeric owner while remaining unreadable to other host users.
 
 ```bash
 docker compose config --quiet
@@ -35,7 +40,7 @@ curl --fail https://$DOMAIN/health/ready
 node scripts/smoke-production.mjs https://$DOMAIN
 ```
 
-Do not mount the existing Wallet A or Wallet B data directories into these containers. A future Zcash verification service needs a separately approved, least-privilege testnet design.
+Do not mount the existing Wallet A or Wallet B data directories into these containers. The source verifier remains outside this public stack pending the watch-only compatibility gate in [production verifier architecture](production-verifier.md).
 
 ## Backup
 

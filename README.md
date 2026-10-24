@@ -12,7 +12,7 @@ The application does not offer mainnet execution, automatic payouts, trustless s
 
 ## Current implementation
 
-The public application can inspect exact route terms, create an owner-scoped request, wait for operator review, display payment instructions only after a future durable operator allocation, show private-session request history, and explain the route through a constrained assistant.
+The public application can inspect exact route terms, create an owner-scoped request, follow the durable operator/verification timeline, display encrypted-at-rest payment instructions only after a validated allocation, and retrieve a redacted or owner-private verified receipt.
 
 The standalone Node server provides:
 
@@ -23,7 +23,7 @@ The standalone Node server provides:
 - Static production assets and SPA fallbacks for `/history` and other frontend routes.
 - No HTTP endpoints for address derivation, wallet RPC, payout approval, signing, or broadcasting.
 
-PostgreSQL migrations define immutable order manifests, allocation journals, authorization records, replay-safe settlement evidence, verified receipts, state versions, public request ownership, and append-only audit history. The existing operator JSON database has deliberately not been migrated.
+PostgreSQL is authoritative for new production requests, signed order manifests, allocation journals, scoped authorizations, replay references, encrypted settlement evidence, authenticated receipts, state versions, ownership, and append-only audit history. Existing operator JSON databases are preserved but inactive and have deliberately not been migrated.
 
 ## Development
 
@@ -43,6 +43,7 @@ Vite no longer contains backend middleware. For split development, run the API a
 ```bash
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm db:migrate
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
+ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
 PUBLIC_ORIGIN='http://127.0.0.1:5173' \
 ROUTE_DESTINATION_RECIPIENT='0xYOUR_CONFIRMED_BASE_SEPOLIA_RECEIVER' \
 corepack pnpm dev:api
@@ -61,6 +62,7 @@ corepack pnpm build
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm db:migrate
 NODE_ENV=development \
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
+ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
 PUBLIC_ORIGIN='http://127.0.0.1:8787' \
 ROUTE_DESTINATION_RECIPIENT='0xYOUR_CONFIRMED_BASE_SEPOLIA_RECEIVER' \
 corepack pnpm start
@@ -71,34 +73,42 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 ## Deployment
 
-See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. See [storage migration](docs/storage-migration.md) before any attempt to move private operator records.
+See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
 
 The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. The verifier has no host port and requires a separate service token. Zcash verification deployment remains blocked pending an approved design that does not copy existing wallet secrets onto the server.
 
-## Operator-only configuration
+## Operator-only settlement commands
 
 Private operator state defaults to `${XDG_DATA_HOME:-~/.local/share}/zecathon-crosschain-app` with mode-`0700` directories and mode-`0600` files. It is outside frontend assets and ignored by Git.
 
-Status is read-only:
+Production lifecycle commands require `DATABASE_URL`, `ZECATHON_ENCRYPTION_KEY_FILE`, and the separately provisioned operator HMAC key. Status and review are read-only:
 
 ```bash
 corepack pnpm operator -- status
-corepack pnpm operator -- readiness
-corepack pnpm operator -- preflight
+corepack pnpm operator -- pending-requests
+corepack pnpm operator -- orders
 ```
 
-Wallet A must be bound explicitly; there is no guessed path, Wallet B fallback, or mainnet fallback:
+The exact lifecycle sequence is:
 
 ```bash
-corepack pnpm operator -- configure-source-wallet \
-  --rpc 'http://127.0.0.1:18392/' \
-  --data-dir '/absolute/path/to/existing/zecd-testnet-data' \
-  --confirm 'CONFIGURE EXISTING TESTNET WALLET A'
+corepack pnpm operator -- accept-request --request REQUEST_UUID --recipient EXACT_BASE_RECIPIENT --terms '0.01 TAZ -> 1 test USDC' --operator OPERATOR_ID --confirm 'EXECUTE ACCEPT-REQUEST'
+corepack pnpm operator -- authorize-allocation --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE AUTHORIZE-ALLOCATION'
+corepack pnpm operator -- reserve-validated-allocation --order ORDER_UUID --authorization AUTH_UUID --receiver EXISTING_RECEIVER --operator OPERATOR_ID --confirm 'EXECUTE RESERVE-VALIDATED-ALLOCATION'
+corepack pnpm operator -- publish-instructions --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE PUBLISH-INSTRUCTIONS'
+corepack pnpm operator -- observe-source --order ORDER_UUID --tx ZCASH_TXID --confirm 'EXECUTE OBSERVE-SOURCE'
+corepack pnpm operator -- confirm-source --order ORDER_UUID --confirm 'EXECUTE CONFIRM-SOURCE'
+corepack pnpm operator -- queue-payout --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE QUEUE-PAYOUT'
+corepack pnpm operator -- authorize-payout --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE AUTHORIZE-PAYOUT'
+corepack pnpm operator -- approve-payout --order ORDER_UUID --authorization AUTH_UUID --operator OPERATOR_ID --confirm 'EXECUTE APPROVE-PAYOUT'
+corepack pnpm operator -- record-payout --order ORDER_UUID --tx BASE_TX_HASH --operator OPERATOR_ID --confirm 'EXECUTE RECORD-PAYOUT'
+corepack pnpm operator -- verify-payout --order ORDER_UUID --confirm 'EXECUTE VERIFY-PAYOUT'
+corepack pnpm operator -- verify-receipt --receipt RECEIPT_UUID
+corepack pnpm operator -- expire-order --order ORDER_UUID --confirm 'EXECUTE EXPIRE-ORDER'
+corepack pnpm operator -- mark-unresolved --order ORDER_UUID --reason REASON --operator OPERATOR_ID --confirm 'EXECUTE MARK-UNRESOLVED'
 ```
 
-This stores no wallet cookie or key. It refuses symlinks, weak permissions, Wallet B, non-loopback RPC, and overwrite attempts.
-
-Address allocation, activation, payout approval, and payout-reference recording remain authenticated operator CLI actions. They are intentionally absent from the public API. Do not run them without a separate reviewed authorization boundary.
+Every mutation requires its exact confirmation phrase in an interactive terminal. `reserve-validated-allocation` validates an already-existing receiver through isolated wallet RPC; it does not derive one. No command unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds. Operator mutations are absent from the public HTTP API.
 
 ## Assistant and voice boundaries
 

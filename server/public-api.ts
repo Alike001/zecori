@@ -108,6 +108,20 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
         else writeJson(response, 200, { request: found });
         return true;
       }
+      const privateReceipt = url.pathname.match(/^\/api\/v1\/receipts\/([0-9a-f-]{36})\/private$/i);
+      if (request.method === 'GET' && privateReceipt) {
+        const found = await store.getPrivateReceipt(session.ownerId, privateReceipt[1]);
+        if (!found) error(response, 404, 'RECEIPT_NOT_FOUND', 'Private receipt not found for this session.', requestId);
+        else writeJson(response, 200, { receipt: found });
+        return true;
+      }
+      const shareableReceipt = url.pathname.match(/^\/api\/v1\/receipts\/([0-9a-f-]{36})$/i);
+      if (request.method === 'GET' && shareableReceipt) {
+        const found = await store.getShareableReceipt(shareableReceipt[1]);
+        if (!found) error(response, 404, 'RECEIPT_NOT_FOUND', 'Verified receipt not found.', requestId);
+        else writeJson(response, 200, { receipt: found });
+        return true;
+      }
       error(response, 404, 'NOT_FOUND', 'API route not found.', requestId); return true;
     } catch (caught) {
       const message = caught instanceof SyntaxError ? 'Malformed JSON request body.' : caught instanceof Error ? caught.message : 'Request failed.';

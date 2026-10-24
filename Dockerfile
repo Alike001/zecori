@@ -9,7 +9,7 @@ RUN pnpm build && pnpm prune --prod
 FROM node:24.14.0-bookworm-slim AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
-RUN groupadd --system zecathon && useradd --system --gid zecathon --home-dir /app zecathon
+RUN groupadd --system --gid 10001 zecathon && useradd --system --uid 10001 --gid zecathon --home-dir /app zecathon
 COPY --from=build --chown=zecathon:zecathon /app/node_modules ./node_modules
 COPY --from=build --chown=zecathon:zecathon /app/dist ./dist
 COPY --from=build --chown=zecathon:zecathon /app/server ./server
