@@ -47,9 +47,10 @@ export function defaultOperatorKeyPath(): string {
 export async function inspectOperatorKey(path = defaultOperatorKeyPath()): Promise<{ ready: boolean; reason?: string }> {
   try {
     const [metadata, folder] = await Promise.all([stat(path), stat(dirname(path))]);
+    const dockerSecret = path.startsWith('/run/secrets/');
     if (!metadata.isFile()) return { ready: false, reason: 'operator key is not a regular file' };
-    if ((metadata.mode & 0o077) !== 0) return { ready: false, reason: 'operator key permissions must be 0600' };
-    if (!folder.isDirectory() || (folder.mode & 0o077) !== 0) return { ready: false, reason: 'operator key directory permissions must be 0700' };
+    if (dockerSecret ? (metadata.mode & 0o022) !== 0 : (metadata.mode & 0o077) !== 0) return { ready: false, reason: 'operator key permissions are not restrictive' };
+    if (!folder.isDirectory() || (!dockerSecret && (folder.mode & 0o077) !== 0)) return { ready: false, reason: 'operator key directory permissions must be 0700' };
     if (metadata.size < 32) return { ready: false, reason: 'operator key must contain at least 32 bytes' };
     return { ready: true };
   } catch (error) {
@@ -74,7 +75,8 @@ export function randomDiversifierIndex(): string {
 
 async function operatorKey(path: string): Promise<Buffer> {
   const metadata = await stat(path);
-  if (!metadata.isFile() || (metadata.mode & 0o077) !== 0) throw new Error('Operator key must be a regular mode-0600 file');
+  const dockerSecret = path.startsWith('/run/secrets/');
+  if (!metadata.isFile() || (dockerSecret ? (metadata.mode & 0o022) !== 0 : (metadata.mode & 0o077) !== 0)) throw new Error('Operator key must be a private regular file');
   const key = await readFile(path);
   if (key.length < 32) throw new Error('Operator key must contain at least 32 bytes');
   return key;

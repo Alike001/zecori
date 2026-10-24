@@ -9,9 +9,11 @@ import { createPostgresPool } from './postgres.ts';
 import { publicApi } from './public-api.ts';
 import { isFullEvmAddress } from '../src/lib/order-coordinator.ts';
 import { loadEncryptionKeyring } from './data-encryption.ts';
+import { PostgresPasskeyAuth, type UserIdentityService } from './user-auth.ts';
 
 export type ApplicationServerOptions = {
   store: PublicOrderRequestStore;
+  auth: UserIdentityService;
   publicOrigin: string;
   destinationRecipient: string;
   staticDirectory?: string;
@@ -77,13 +79,13 @@ async function serveFile(response: ServerResponse, root: string, requested: stri
 export function createApplicationServer(options: ApplicationServerOptions) {
   const staticDirectory = options.staticDirectory ?? join(fileURLToPath(new URL('..', import.meta.url)), 'dist');
   const limiter = new RateLimiter(options.rateLimit?.windowMs ?? 60_000, options.rateLimit?.maximum ?? 60);
-  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, destinationRecipient: options.destinationRecipient, secureCookies: Boolean(options.requireProxyHttps) });
+  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, destinationRecipient: options.destinationRecipient, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
     securityHeaders(response);
     const url = new URL(request.url ?? '/', 'http://internal');
     if (url.pathname === '/health/live') return json(response, 200, { status: 'live' });
     if (url.pathname === '/health/ready') {
-      try { await access(join(staticDirectory, 'index.html')); await options.store.health(); return json(response, 200, { status: 'ready' }); }
+      try { await access(join(staticDirectory, 'index.html')); await Promise.all([options.store.health(), options.auth.health()]); return json(response, 200, { status: 'ready' }); }
       catch { return json(response, 503, { status: 'not-ready' }); }
     }
     const limit = limiter.accept(clientKey(request, Boolean(options.trustProxy)));
@@ -112,10 +114,16 @@ async function start(): Promise<void> {
   const parsedOrigin = new URL(publicOrigin);
   if (parsedOrigin.origin !== publicOrigin || parsedOrigin.pathname !== '/' || parsedOrigin.search || parsedOrigin.hash) throw new Error('PUBLIC_ORIGIN must be an exact origin without a path');
   if (process.env.NODE_ENV === 'production' && (parsedOrigin.protocol !== 'https:' || process.env.TRUST_PROXY !== '1')) throw new Error('Production requires an HTTPS PUBLIC_ORIGIN and TRUST_PROXY=1');
+  if (process.env.NODE_ENV !== 'production' && parsedOrigin.protocol !== 'https:' && !(parsedOrigin.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(parsedOrigin.hostname))) throw new Error('Development WebAuthn requires HTTPS or a loopback localhost origin');
+  const configuredRpId = process.env.WEBAUTHN_RP_ID;
+  if (process.env.NODE_ENV === 'production' && !configuredRpId) throw new Error('Production requires an explicit WEBAUTHN_RP_ID');
+  const rpId = configuredRpId ?? parsedOrigin.hostname;
+  if (rpId.includes('://') || rpId.includes('/') || !(parsedOrigin.hostname === rpId || parsedOrigin.hostname.endsWith(`.${rpId}`))) throw new Error('WEBAUTHN_RP_ID must equal the public hostname or be its registrable parent domain');
   if (!isFullEvmAddress(recipient) || /^0x0{40}$/i.test(recipient)) throw new Error('ROUTE_DESTINATION_RECIPIENT must be a non-zero complete Base address');
   const pool = createPostgresPool();
   const encryption = await loadEncryptionKeyring();
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), publicOrigin, destinationRecipient: recipient, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
+  const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecathon Private Routes', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, publicOrigin, destinationRecipient: recipient, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

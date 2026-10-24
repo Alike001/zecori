@@ -1,0 +1,154 @@
+name: zecathon-staging
+
+services:
+  postgres:
+    image: postgres:17.7-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zecathon_staging_live
+      POSTGRES_USER: zecathon_staging
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes:
+      - staging_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zecathon_staging -d zecathon_staging_live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    networks: [staging_data]
+
+  migrate:
+    build: .
+    user: "${STAGING_RUNTIME_UID:?Set by the staging provisioner}:${STAGING_RUNTIME_GID:?Set by the staging provisioner}"
+    restart: "no"
+    command: ["node", "--experimental-strip-types", "scripts/migrate.ts"]
+    environment: &database_environment
+      DB_HOST: postgres
+      DB_NAME: zecathon_staging_live
+      DB_USER: zecathon_staging
+      DB_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [staging_data]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  api:
+    build: .
+    user: "${STAGING_RUNTIME_UID:?Set by the staging provisioner}:${STAGING_RUNTIME_GID:?Set by the staging provisioner}"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    environment:
+      <<: *database_environment
+      NODE_ENV: staging
+      HOST: 0.0.0.0
+      PORT: 8787
+      PUBLIC_ORIGIN: http://localhost:8787
+      WEBAUTHN_RP_ID: localhost
+      ROUTE_DESTINATION_RECIPIENT: ${ROUTE_DESTINATION_RECIPIENT:?Set a confirmed Base Sepolia test receiver in the staging env file}
+      ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
+    secrets: [db_password, encryption_keyring]
+    ports:
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [staging_data, staging_local]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  operator:
+    profiles: [operator]
+    build: .
+    user: "${STAGING_RUNTIME_UID:?Set by the staging provisioner}:${STAGING_RUNTIME_GID:?Set by the staging provisioner}"
+    command: ["node", "--experimental-strip-types", "scripts/settlement-operator.ts", "status"]
+    stdin_open: true
+    tty: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      <<: *database_environment
+      NODE_ENV: staging
+      ZECATHON_OPERATOR_ID: ${ZECATHON_OPERATOR_ID:?Set a staging operator ID}
+      ZECATHON_OPERATOR_KEY: /run/secrets/operator_hmac
+      ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
+      ZECATHON_RELAY_ENCRYPTION_KEY_FILE: /run/secrets/relay_encryption_keyring
+      ZECATHON_RELAY_COORDINATOR_PRIVATE_KEY_FILE: /run/secrets/relay_coordinator_private
+      ZECATHON_RELAY_COORDINATOR_PUBLIC_KEY_FILE: /run/secrets/relay_coordinator_public
+      ZECATHON_RELAY_VERIFIER_PUBLIC_KEY_FILE: /run/secrets/relay_verifier_public
+      ZECATHON_RELAY_VERIFIER_ID: ${ZECATHON_RELAY_VERIFIER_ID:-staging-verifier}
+    secrets: [db_password, encryption_keyring, relay_encryption_keyring, operator_hmac, relay_coordinator_private, relay_coordinator_public, relay_verifier_public]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [staging_data]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  verifier-relay:
+    profiles: [relay]
+    build: .
+    user: "${STAGING_RUNTIME_UID:?Set by the staging provisioner}:${STAGING_RUNTIME_GID:?Set by the staging provisioner}"
+    command: ["node", "--experimental-strip-types", "scripts/private-verifier-relay.ts"]
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    environment:
+      <<: *database_environment
+      NODE_ENV: staging
+      ZECATHON_RELAY_ENCRYPTION_KEY_FILE: /run/secrets/relay_encryption_keyring
+      ZECATHON_RELAY_COORDINATOR_PUBLIC_KEY_FILE: /run/secrets/relay_coordinator_public
+      ZECATHON_RELAY_VERIFIER_PRIVATE_KEY_FILE: /run/secrets/relay_verifier_private
+      ZECATHON_RELAY_VERIFIER_ID: ${ZECATHON_RELAY_VERIFIER_ID:-staging-verifier}
+      ZCASH_RPC_URL: ${ZCASH_RPC_URL:-http://host.docker.internal:18232}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    secrets: [db_password, relay_encryption_keyring, relay_coordinator_public, relay_verifier_private]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    networks: [staging_data, verifier_egress]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+networks:
+  staging_data:
+    internal: true
+  staging_local: {}
+  verifier_egress: {}
+
+volumes:
+  staging_postgres_data:
+    name: zecathon_staging_postgres_data
+
+secrets:
+  db_password:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/db_password
+  encryption_keyring:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/encryption-keyring.json
+  relay_encryption_keyring:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/relay-encryption-keyring.json
+  operator_hmac:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/operator-hmac.key
+  relay_coordinator_private:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/relay-coordinator-private.pem
+  relay_coordinator_public:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/relay-coordinator-public.pem
+  relay_verifier_private:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/relay-verifier-private.pem
+  relay_verifier_public:
+    file: ${STAGING_SECRETS_DIR:?Set an absolute staging secrets directory}/relay-verifier-public.pem

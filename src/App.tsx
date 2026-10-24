@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, Bot, Check, CircleAlert, Clock3, LockKeyhole, MicOff, RefreshCw, Send, ShieldCheck } from 'lucide-react';
-import { createOrderRequest, getCapabilities, listOrderRequests, type PublicCapabilities, type PublicOrderRequest } from './lib/order-api.ts';
+import { ArrowLeft, ArrowRight, Bot, Check, CircleAlert, Clock3, KeyRound, LockKeyhole, LogOut, MicOff, RefreshCw, Send, ShieldCheck } from 'lucide-react';
+import { createOrderRequest, getCapabilities, getSession, listOrderRequests, loginWithPasskey, logout, registerPasskey, type PublicCapabilities, type PublicOrderRequest, type UserSession } from './lib/order-api.ts';
 import { respondToAgent, type AgentReply } from './lib/agent-capabilities.ts';
 import { voiceAvailability } from './lib/voice.ts';
 import { resolveLocale, translate } from './lib/i18n.ts';
@@ -32,9 +32,15 @@ function RequestCard({ request, onRefresh }: { request: PublicOrderRequest; onRe
 function History({ requests }: { requests: PublicOrderRequest[] }) {
   return <main className="main compact-page"><div className="page-nav"><button className="subtle-button" onClick={() => navigate('/')}><ArrowLeft size={15}/> Route</button><span className="mode">PRIVATE SESSION HISTORY</span></div>
     <div className="eyebrow"><span className="eyebrow-bar"/> REQUEST LEDGER</div><h1>Your route<br/><span>requests.</span></h1>
-    <p className="lead">This browser session shows requests it created. A request is not a payment, payout, or verified settlement receipt.</p>
-    <section className="panel history-table">{requests.length ? requests.map(request => <div className="history-row-static" key={request.id}><div><strong>{short(request.id)}</strong><small>0.01 TAZ → 1 test USDC</small></div><div><small>Created</small><strong>{new Date(request.createdAt).toLocaleString()}</strong></div><span className={`status-chip status-${request.status.toLowerCase()}`}>{label(request.status)}</span></div>) : <div className="empty-state">No requests exist in this browser session.</div>}</section>
+    <p className="lead">Your passkey account retains this history across securely authenticated sessions. A request is not a payment, payout, or verified settlement receipt.</p>
+    <section className="panel history-table">{requests.length ? requests.map(request => <div className="history-row-static" key={request.id}><div><strong>{short(request.id)}</strong><small>0.01 TAZ → 1 test USDC</small></div><div><small>Created</small><strong>{new Date(request.createdAt).toLocaleString()}</strong></div><span className={`status-chip status-${request.status.toLowerCase()}`}>{label(request.status)}</span></div>) : <div className="empty-state">No requests exist for this account.</div>}</section>
   </main>;
+}
+
+function IdentityPanel({ session, busy, onRegister, onLogin, onAdd, onLogout }: { session: UserSession; busy: boolean; onRegister: (name: string) => void; onLogin: () => void; onAdd: () => void; onLogout: () => void }) {
+  const [name, setName] = useState('');
+  if (session.authenticated) return <section className="panel identity-panel"><div><span className="section-label"><KeyRound size={14}/> PASSKEY ACCOUNT</span><p><strong>{session.user?.displayName}</strong> · {session.user?.passkeyCount} registered passkey{session.user?.passkeyCount === 1 ? '' : 's'}</p><small>Register at least two passkeys so another authenticator can recover access.</small></div><div className="identity-actions"><button className="subtle-button" disabled={busy} onClick={onAdd}>Add passkey</button><button className="subtle-button" disabled={busy} onClick={onLogout}><LogOut size={15}/> Logout</button></div></section>;
+  return <section className="panel identity-panel"><div className="panel-top"><span className="section-label"><KeyRound size={14}/> RECOVERABLE IDENTITY</span><span className="small-chip">Passkeys only</span></div><p>Register or sign in before creating a request. No email or recovery-token shortcut is available.</p><div className="identity-form"><label><span>Account name</span><input value={name} maxLength={80} autoComplete="name" onChange={event => setName(event.target.value)} placeholder="Private account label"/></label><button className="primary-button" disabled={busy || !name.trim()} onClick={() => onRegister(name)}>Create with passkey</button><button className="subtle-button" disabled={busy} onClick={onLogin}>Sign in with passkey</button></div></section>;
 }
 
 function AgentPanel({ capabilities, request }: { capabilities: PublicCapabilities | null; request?: PublicOrderRequest }) {
@@ -56,14 +62,20 @@ export default function App() {
   const locale = resolveLocale(navigator.language);
   const [route, setRoute] = useState(window.location.pathname);
   const [capabilities, setCapabilities] = useState<PublicCapabilities | null>(null);
+  const [session, setSession] = useState<UserSession>({ authenticated: false });
   const [requests, setRequests] = useState<PublicOrderRequest[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => { const handler = () => setRoute(window.location.pathname); window.addEventListener('popstate', handler); return () => window.removeEventListener('popstate', handler); }, []);
-  useEffect(() => { void Promise.all([getCapabilities(), listOrderRequests()]).then(([next, history]) => { setCapabilities(next); setRequests(history); }).catch(caught => setError(caught instanceof Error ? caught.message : 'Service unavailable')); }, []);
+  useEffect(() => { void Promise.all([getCapabilities(), getSession()]).then(async ([next, identity]) => { setCapabilities(next); setSession(identity); setRequests(identity.authenticated ? await listOrderRequests() : []); }).catch(caught => setError(caught instanceof Error ? caught.message : 'Service unavailable')); }, []);
   const active = useMemo(() => requests.find(item => !['COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED', 'CANCELLED'].includes(item.status)), [requests]);
   async function create() { setBusy(true); setError(null); try { const request = await createOrderRequest(); setRequests(items => [request, ...items.filter(item => item.id !== request.id)]); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Request failed'); } finally { setBusy(false); } }
   async function refresh() { if (!active) return; setBusy(true); try { const history = await listOrderRequests(); setRequests(history); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Refresh failed'); } finally { setBusy(false); } }
+  async function reloadIdentity() { const identity = await getSession(); setSession(identity); setRequests(identity.authenticated ? await listOrderRequests() : []); }
+  async function register(name: string) { setBusy(true); setError(null); try { await registerPasskey(name, 'Primary passkey'); await reloadIdentity(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Passkey registration failed'); } finally { setBusy(false); } }
+  async function login() { setBusy(true); setError(null); try { await loginWithPasskey(); await reloadIdentity(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Passkey login failed'); } finally { setBusy(false); } }
+  async function addPasskey() { setBusy(true); setError(null); try { await registerPasskey(session.user?.displayName ?? 'Zecathon account', `Additional passkey ${session.user?.passkeyCount ? session.user.passkeyCount + 1 : 2}`, true); await reloadIdentity(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Passkey registration failed'); } finally { setBusy(false); } }
+  async function signOut() { setBusy(true); setError(null); try { await logout(); await reloadIdentity(); } catch (caught) { setError(caught instanceof Error ? caught.message : 'Logout failed'); } finally { setBusy(false); } }
   if (route === '/history') return <History requests={requests}/>;
   const terms = capabilities?.route;
   return <div className="page"><header className="header"><button className="brand brand-button" onClick={() => navigate('/')}><span className="brand-symbol"><ShieldCheck size={20}/></span><span>ZECATHON <small>PRIVATE ROUTES</small></span></button><div className="header-side"><span className="mode">TESTNET · OPERATOR APPROVED</span><span className="status-dot"/></div></header>
@@ -72,11 +84,12 @@ export default function App() {
       <div className="safety-notice"><LockKeyhole size={17}/><span>Mainnet and automatic payouts are disabled. Every settlement step requires deterministic policy and independent evidence.</span></div>
       <div className="page-actions"><button className="subtle-button" onClick={() => navigate('/history')}>{translate(locale, 'history')}</button></div>
       {error && <div className="inline-warning" role="alert"><CircleAlert size={17}/>{error}</div>}
+      <IdentityPanel session={session} busy={busy} onRegister={name => void register(name)} onLogin={() => void login()} onAdd={() => void addPasskey()} onLogout={() => void signOut()}/>
       <section className="route-shell panel"><div className="panel-top"><span className="section-label">SUPPORTED ROUTE</span><span className="small-chip">Fixed test terms</span></div>
         <div className="route-pair"><div className="route-side"><small>SOURCE</small><strong>{terms?.source.amount ?? '0.01'} TAZ</strong><span>Zcash testnet · Ironwood shielded</span><code>1,000,000 zatoshis</code></div><div className="route-arrow"><ArrowRight/></div><div className="route-side"><small>DESTINATION</small><strong>{terms?.destination.amount ?? '1'} test USDC</strong><span>Base Sepolia · chain 84532</span><code>{capabilities ? short(capabilities.destinationRecipient) : 'Loading recipient…'}</code></div></div>
         <div className="terms-grid"><div><small>Exchange basis</small><p>{terms?.rate.description ?? 'Loading exact terms…'}</p></div><div><small>Confirmations</small><p>{terms ? `${terms.source.confirmations} Zcash · ${terms.destination.confirmations} Base` : 'Loading…'}</p></div><div><small>Provider model</small><p>Trusted testnet liquidity provider · manual approval</p></div></div>
         <details><summary>Custody, late-payment and refund limits</summary><p>{terms?.custody}</p><p>{terms?.refunds}</p></details>
-        {!active && <button className="primary-button request-button" disabled={!capabilities || busy} onClick={() => void create()}>{busy ? 'Creating scoped request…' : translate(locale, 'requestReview')}<ArrowRight size={17}/></button>}
+        {!active && <button className="primary-button request-button" disabled={!capabilities || busy || !session.authenticated} onClick={() => void create()}>{busy ? 'Working…' : session.authenticated ? translate(locale, 'requestReview') : 'Sign in to request review'}<ArrowRight size={17}/></button>}
         <p className="fine-print">Creating a request allocates no address, moves no funds, and gives the assistant no transaction authority.</p>
       </section>
       {active && <RequestCard request={active} onRefresh={() => void refresh()}/>}<AgentPanel capabilities={capabilities} request={active}/>

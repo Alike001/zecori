@@ -7,7 +7,7 @@ async function readRegular(path: string, privateMaterial: boolean): Promise<Buff
   const absolute = resolve(path); assertOutsideWorkspace(absolute);
   const [link, metadata] = await Promise.all([lstat(absolute), stat(absolute)]);
   if (link.isSymbolicLink() || !metadata.isFile()) throw new Error('Relay key must be a non-symlink regular file');
-  if (privateMaterial && (metadata.mode & 0o077) !== 0) throw new Error('Relay private key must be mode 0600');
+  if (privateMaterial && (absolute.startsWith('/run/secrets/') ? (metadata.mode & 0o022) !== 0 : (metadata.mode & 0o077) !== 0)) throw new Error('Relay private key must be private and non-writable by group or others');
   const value = await readFile(absolute); if (value.length > 16_384) throw new Error('Relay key file is unexpectedly large'); return value;
 }
 

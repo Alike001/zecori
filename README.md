@@ -17,7 +17,7 @@ The public application can inspect exact route terms, create an owner-scoped req
 The standalone Node server provides:
 
 - `/api/v1` with strict API versioning and structured errors.
-- HttpOnly session cookies, SameSite protection, exact-origin checks, and double-submit CSRF tokens.
+- WebAuthn passkeys, stable database-backed users, rotating/revocable HttpOnly sessions, exact-origin checks, and double-submit CSRF tokens.
 - Request-size limits, rate limiting, HTTP parser timeouts, and security headers.
 - `/health/live` and dependency-aware `/health/ready`.
 - Static production assets and SPA fallbacks for `/history` and other frontend routes.
@@ -75,6 +75,8 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 ## Deployment
 
 See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
+
+For isolated localhost staging, passkey behavior, encrypted backup/restore, and the exact safe startup commands, see [milestone 05 staging](docs/staging-milestone-05.md).
 
 The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. The verifier has no host port and requires a separate service token. Zcash source verification uses a durable PostgreSQL relay with separate Ed25519 coordinator/verifier identities, short-lived signed messages, encrypted evidence and lease recovery; wallet RPC remains loopback-only on the operator host. Production use still requires approved PostgreSQL mTLS identities and a separately approved watch-only UFVK ceremony.
 

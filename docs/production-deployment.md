@@ -2,7 +2,7 @@
 
 This stack is a foundation for a hardened VPS deployment. It does not enable mainnet, wallet unlocking, address derivation, transaction signing, or payouts.
 
-The stack is not approved for public launch while the durable user-authentication/recovery blocker in [the authentication audit](production-authentication-audit.md) remains open.
+Durable passkey identity is implemented, but public launch remains blocked on final-domain HTTPS/RP-ID validation and the operational gates in [milestone 05 staging](staging-milestone-05.md).
 
 ## Architecture
 
@@ -119,7 +119,7 @@ The restore environment must receive a copy of every referenced encryption-key v
 2. **Restore rehearsal:** encrypted backup plus isolated restore; reconcile schema versions, counts, unique allocations/replays, receipts, audit history and relay queue.
 3. **Private staging:** start PostgreSQL/API/Caddy with a non-public hostname or access control. Run migration, health checks, Docker smoke and restart/recovery. No wallet material is present.
 4. **Verifier staging:** provision separate Ed25519 identities and mutually authenticated tunnel. Use TEST-ONLY deterministic evidence first. Do not import a UFVK until a separate ceremony is approved.
-5. **Authentication gate:** deploy reviewed durable account identity, session rotation/revocation and phishing-resistant recovery. Repeat ownership and CSRF tests. This is currently blocked.
+5. **Authentication gate:** configure the final HTTPS origin and explicit RP ID, register two real passkeys, and repeat session rotation/revocation, ownership, challenge replay, and CSRF tests on that exact domain. Localhost credentials are not portable.
 6. **Read-only canary:** expose informational pages and request creation only after monitoring/backup alerts are green. Operator mutation remains CLI-only.
 7. **First linked testnet order:** follow [the separate approval runbook](first-linked-test-readiness.md). Each wallet start, address allocation, source transfer and Base payout is a separate approval. Stop on uncertainty.
 8. **Promotion decision:** review receipts, logs, privacy scan, reorg behavior, backup evidence and unresolved queue. Mainnet remains out of scope.

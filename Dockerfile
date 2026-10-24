@@ -18,7 +18,6 @@ COPY --from=build --chown=zecathon:zecathon /app/scripts ./scripts
 COPY --from=build --chown=zecathon:zecathon /app/package.json ./package.json
 COPY --chown=zecathon:zecathon docker/entrypoint.sh /usr/local/bin/zecathon-entrypoint
 RUN chmod 0555 /usr/local/bin/zecathon-entrypoint
-USER zecathon
 EXPOSE 8787
 ENTRYPOINT ["zecathon-entrypoint"]
 CMD ["node", "--experimental-strip-types", "server/app-server.ts"]
