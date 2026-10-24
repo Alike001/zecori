@@ -8,9 +8,40 @@ import { PostgresSettlementStore } from './postgres-settlement-store.ts';
 import { BASE_USDC } from '../src/lib/order-coordinator.ts';
 import { PrivateVerificationRelay } from './private-verification-relay.ts';
 import { relayFingerprint, signRelayEvidence, verifyRelayChallenge, type RelayEvidencePayload } from './private-verification-protocol.ts';
+import { executePostgresAddressAllocation } from './postgres-address-allocation.ts';
+import type { RpcCall } from './rpc-client.ts';
 
 const databaseUrl = process.env.POSTGRES_TEST_URL;
 function testOnlyTransaction(label: string, orderId: string): string { return createHash('sha256').update(`TEST-ONLY:${label}:${orderId}`).digest('hex'); }
+async function reserveTestAllocation(
+  store: PostgresSettlementStore,
+  orderId: string,
+  operatorId: string,
+  authorizationId: string,
+  verifier: (domain: string, payload: string, signature: string) => Promise<void>,
+  candidate: { allocationId: string; address: string; diversifierIndex: string; validatedAt: string; sourceNotBeforeHeight: number; state: 'AVAILABLE' },
+  now = Date.now(),
+) {
+  const operation = await store.beginAddressAllocation(orderId, operatorId, authorizationId, candidate.diversifierIndex, verifier, now);
+  candidate.allocationId = operation.allocationId;
+  await store.markAddressDerivationStarted(orderId, authorizationId, operatorId, now);
+  await store.recordDerivedAddress(orderId, authorizationId, operatorId, candidate.address, candidate.diversifierIndex, now);
+  return store.reserveDerivedAddress(orderId, operatorId, authorizationId, candidate, now);
+}
+
+function allocationRpc(address: string, index: string, behavior: { derive?: () => void; fail?: Error; wrongIndex?: string } = {}): RpcCall {
+  return async <T>(method: string) => {
+    if (method === 'getblockchaininfo') return { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false } as T;
+    if (method === 'getwalletinfo') return { scanning: false, enhanced_through: 500, unlocked_until: 0 } as T;
+    if (method === 'z_listtransactions') return [] as T;
+    if (method === 'getaddressinfo') return { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: index } as T;
+    if (method === 'z_getaddressforaccount') {
+      behavior.derive?.(); if (behavior.fail) throw behavior.fail;
+      return { address, diversifier_index: behavior.wrongIndex ?? index, receiver_types: ['orchard'] } as T;
+    }
+    throw new Error(`Unexpected RPC method ${method}`);
+  };
+}
 
 test('PostgreSQL migration, concurrent request idempotency, restart persistence, and immutable audit constraints', { skip: !databaseUrl }, async () => {
   const firstPool = createPostgresPool(databaseUrl);
@@ -51,10 +82,10 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   const verifyAuthorization = async (_domain: string, _payload: string, signature: string) => { if (signature !== 'b'.repeat(64)) throw new Error('forged authorization'); };
   const diversifierBase = BigInt(`0x${randomBytes(8).toString('hex')}`);
   const candidate = { allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: diversifierBase.toString(), validatedAt: new Date().toISOString(), sourceNotBeforeHeight: 500, state: 'AVAILABLE' as const };
-  await assert.rejects(settlements.reserveValidatedAllocation(request.id, 'wrong-operator', authorizationId, verifyAuthorization, candidate), /wrong identity/);
+  await assert.rejects(settlements.beginAddressAllocation(request.id, 'wrong-operator', authorizationId, candidate.diversifierIndex, verifyAuthorization), /Operator identity/);
   const authorization = await pool.query<{ state: string }>('SELECT state FROM authorization_records WHERE authorization_id=$1', [authorizationId]);
   assert.equal(authorization.rows[0].state, 'ISSUED');
-  await settlements.reserveValidatedAllocation(request.id, 'operator-integration', authorizationId, verifyAuthorization, candidate);
+  await reserveTestAllocation(settlements, request.id, 'operator-integration', authorizationId, verifyAuthorization, candidate);
   await settlements.publishPaymentInstructions(request.id, 'operator-integration');
   const sourceTransactionId = testOnlyTransaction('source-replay', request.id);
   const ownerView = await requests.get(owner, request.id); const strangerView = await requests.get(stranger, request.id);
@@ -77,7 +108,7 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   await settlements.acceptRequest(request2.id, 'operator-integration', request2.destinationRecipient, async () => 'a'.repeat(64));
   const auth2 = await settlements.issueAuthorization(request2.id, 'ADDRESS_ALLOCATION', 'operator-integration', async () => 'b'.repeat(64));
   const candidate2 = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (diversifierBase + 1n).toString() };
-  await settlements.reserveValidatedAllocation(request2.id, 'operator-integration', auth2, verifyAuthorization, candidate2); await settlements.publishPaymentInstructions(request2.id, 'operator-integration');
+  await reserveTestAllocation(settlements, request2.id, 'operator-integration', auth2, verifyAuthorization, candidate2); await settlements.publishPaymentInstructions(request2.id, 'operator-integration');
   await assert.rejects(settlements.observeSource(request2.id, sourceTransactionId, sourceVerifier), /duplicate key|unique constraint/i);
   assert.equal((await requests.get(owner2, request2.id))?.status, 'PAYMENT_READY');
 
@@ -85,7 +116,7 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   await settlements.acceptRequest(request3.id, 'operator-integration', request3.destinationRecipient, async () => 'a'.repeat(64));
   const auth3 = await settlements.issueAuthorization(request3.id, 'ADDRESS_ALLOCATION', 'operator-integration', async () => 'b'.repeat(64));
   const candidate3 = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (diversifierBase + 2n).toString() };
-  await settlements.reserveValidatedAllocation(request3.id, 'operator-integration', auth3, verifyAuthorization, candidate3); await settlements.publishPaymentInstructions(request3.id, 'operator-integration');
+  await reserveTestAllocation(settlements, request3.id, 'operator-integration', auth3, verifyAuthorization, candidate3); await settlements.publishPaymentInstructions(request3.id, 'operator-integration');
   await settlements.observeSource(request3.id, testOnlyTransaction('source-complete', request3.id), sourceVerifier); await settlements.queuePayout(request3.id, 'operator-integration');
   const payoutAuth = await settlements.issueAuthorization(request3.id, 'PAYOUT', 'operator-integration', async () => 'b'.repeat(64));
   await settlements.approvePayout(request3.id, 'operator-integration', payoutAuth, verifyAuthorization);
@@ -98,6 +129,80 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   const restarted = createPostgresPool(databaseUrl); const recovered = new PostgresPublicOrderRequestStore(restarted, encryption);
   assert.equal((await recovered.get(owner, request.id))?.paymentInstructions?.receiver, candidate.address);
   await restarted.end();
+});
+
+test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers every durable transition', { skip: !databaseUrl }, async t => {
+  const pool = createPostgresPool(databaseUrl); await migrateDatabase(pool);
+  t.after(async () => { await pool.end().catch(() => undefined); });
+  const encryption = new DataEncryption({ activeVersion: 17, keys: new Map([[17, randomBytes(32)]]) });
+  const requests = new PostgresPublicOrderRequestStore(pool, encryption); const store = new PostgresSettlementStore(pool, encryption);
+  const operatorId = 'allocation-integration'; const signature = 'd'.repeat(64);
+  const verify = async (_domain: string, _payload: string, provided: string) => { if (provided !== signature) throw new Error('forged operator authorization'); };
+  const accepted = async (now = Date.now()) => {
+    const owner = randomUUID(); const request = await requests.create(owner, `0x${randomBytes(20).toString('hex')}`, now);
+    await store.acceptRequest(request.id, operatorId, request.destinationRecipient, async () => 'a'.repeat(64), now + 1);
+    const authorizationId = await store.issueAuthorization(request.id, 'ADDRESS_ALLOCATION', operatorId, async () => signature, now + 2, 60);
+    return { owner, request, authorizationId, now };
+  };
+
+  const crashPoints = ['afterJournal', 'afterRpcStart', 'afterDerivation', 'afterDerivedRecord', 'afterReservation'] as const;
+  for (let number = 0; number < crashPoints.length; number += 1) {
+    const scenario = await accepted(); const index = `${900719925474099300000n + BigInt(number)}`;
+    const address = `utest1${randomBytes(32).toString('hex')}`; let derivations = 0;
+    await assert.rejects(executePostgresAddressAllocation({
+      store, orderId: scenario.request.id, authorizationId: scenario.authorizationId, operatorId, verifyAuthorization: verify,
+      diversifierIndex: index, rpc: allocationRpc(address, index, { derive: () => { derivations += 1; } }),
+      hooks: { [crashPoints[number]]: () => { throw new Error(`TEST-ONLY crash ${crashPoints[number]}`); } },
+    }), /TEST-ONLY crash/);
+    const interrupted = await store.addressAllocationOperation(scenario.request.id, scenario.authorizationId, operatorId);
+    assert.equal(interrupted.diversifierIndex, index);
+    const allocationId = await executePostgresAddressAllocation({
+      store, orderId: scenario.request.id, authorizationId: scenario.authorizationId, operatorId, verifyAuthorization: verify,
+      mode: 'RECONCILE', now: scenario.now + 120_000, rpc: allocationRpc(address, index, { derive: () => { derivations += 1; } }),
+    });
+    const recovered = await store.addressAllocationOperation(scenario.request.id, scenario.authorizationId, operatorId);
+    assert.equal(recovered.phase, 'RESERVED'); assert.equal(recovered.allocationId, allocationId); assert.equal(recovered.diversifierIndex, index);
+    assert.equal(derivations, crashPoints[number] === 'afterJournal' || crashPoints[number] === 'afterRpcStart' ? 1 : crashPoints[number] === 'afterDerivation' ? 2 : 1);
+  }
+
+  const uncertain = await accepted(); const uncertainIndex = '900719925474099399991'; const uncertainAddress = `utest1${randomBytes(32).toString('hex')}`;
+  await assert.rejects(executePostgresAddressAllocation({ store, orderId: uncertain.request.id, authorizationId: uncertain.authorizationId, operatorId, verifyAuthorization: verify, diversifierIndex: uncertainIndex, rpc: allocationRpc(uncertainAddress, uncertainIndex, { fail: new Error('RPC timeout') }) }), /requires reconciliation/);
+  const uncertainOperation = await store.addressAllocationOperation(uncertain.request.id, uncertain.authorizationId, operatorId);
+  assert.equal(uncertainOperation.phase, 'RPC_UNCERTAIN');
+  await assert.rejects(executePostgresAddressAllocation({ store, orderId: uncertain.request.id, authorizationId: uncertain.authorizationId, operatorId, verifyAuthorization: async () => { throw new Error('forged recovery authorization'); }, mode: 'RECONCILE', rpc: allocationRpc(uncertainAddress, uncertainIndex) }), /forged recovery authorization/);
+  assert.equal((await store.addressAllocationOperation(uncertain.request.id, uncertain.authorizationId, operatorId)).rpcAttemptCount, uncertainOperation.rpcAttemptCount);
+  await executePostgresAddressAllocation({ store, orderId: uncertain.request.id, authorizationId: uncertain.authorizationId, operatorId, verifyAuthorization: verify, mode: 'RECONCILE', rpc: allocationRpc(uncertainAddress, uncertainIndex) });
+
+  const expiredOrder = await accepted(); const expiredIndex = '900719925474099399995'; const expiredAddress = `utest1${randomBytes(32).toString('hex')}`;
+  await assert.rejects(executePostgresAddressAllocation({
+    store, orderId: expiredOrder.request.id, authorizationId: expiredOrder.authorizationId, operatorId, verifyAuthorization: verify,
+    diversifierIndex: expiredIndex, rpc: allocationRpc(expiredAddress, expiredIndex), hooks: { afterDerivedRecord: () => { throw new Error('TEST-ONLY wait past order expiry'); } },
+  }), /wait past order expiry/);
+  const afterOrderExpiry = expiredOrder.now + 31 * 60_000;
+  await executePostgresAddressAllocation({ store, orderId: expiredOrder.request.id, authorizationId: expiredOrder.authorizationId, operatorId, verifyAuthorization: verify, mode: 'RECONCILE', now: afterOrderExpiry, rpc: allocationRpc(expiredAddress, expiredIndex) });
+  await assert.rejects(store.publishPaymentInstructions(expiredOrder.request.id, operatorId, afterOrderExpiry), /expired before payment instructions/);
+  await store.expire(expiredOrder.request.id, afterOrderExpiry);
+  assert.equal((await requests.get(expiredOrder.owner, expiredOrder.request.id))?.status, 'FAILED');
+
+  const concurrent = await accepted(); const concurrentIndex = '900719925474099399992'; const concurrentAddress = `utest1${randomBytes(32).toString('hex')}`;
+  const results = await Promise.allSettled(Array.from({ length: 2 }, () => executePostgresAddressAllocation({ store, orderId: concurrent.request.id, authorizationId: concurrent.authorizationId, operatorId, verifyAuthorization: verify, diversifierIndex: concurrentIndex, rpc: allocationRpc(concurrentAddress, concurrentIndex) })));
+  assert.ok(results.some(item => item.status === 'fulfilled'));
+  assert.equal((await store.addressAllocationOperation(concurrent.request.id, concurrent.authorizationId, operatorId)).phase, 'RESERVED');
+
+  const cancellable = await accepted(); const cancelIndex = '900719925474099399993';
+  const cancelOperation = await store.beginAddressAllocation(cancellable.request.id, operatorId, cancellable.authorizationId, cancelIndex, verify);
+  await store.cancelAddressAllocation(cancellable.request.id, cancellable.authorizationId, operatorId, verify, 'operator abandoned before RPC', cancellable.now + 120_000);
+  assert.equal((await store.addressAllocationOperation(cancellable.request.id, cancellable.authorizationId, operatorId)).phase, 'CANCELLED');
+  assert.equal(cancelOperation.rpcAttemptCount, 0);
+
+  const forged = await accepted();
+  await assert.rejects(store.beginAddressAllocation(forged.request.id, operatorId, forged.authorizationId, '900719925474099399994', async () => { throw new Error('forged operator authorization'); }), /forged/);
+  assert.equal((await pool.query('SELECT count(*)::int AS count FROM address_allocation_journal WHERE order_id=$1', [forged.request.id])).rows[0].count, 0);
+
+  const raw = await pool.query<{ encrypted_derivation: Buffer; encrypted_receiver: Buffer; details: Record<string, unknown> }>(`SELECT j.encrypted_derivation,j.encrypted_receiver,a.details FROM address_allocation_journal j JOIN audit_events a ON a.order_id=j.order_id WHERE j.order_id=$1 ORDER BY a.event_id DESC LIMIT 1`, [uncertain.request.id]);
+  assert.ok(!raw.rows[0].encrypted_derivation.toString().includes(uncertainIndex));
+  assert.ok(!raw.rows[0].encrypted_receiver.toString().includes(uncertainAddress));
+  assert.ok(!JSON.stringify(raw.rows[0].details).includes(uncertainAddress));
 });
 
 test('TEST-ONLY private verifier relay survives leases, rejects replay, applies two stages, and preserves unresolved', { skip: !databaseUrl }, async t => {
@@ -114,7 +219,7 @@ test('TEST-ONLY private verifier relay survives leases, rejects replay, applies 
   const verifyAuthorization = async (_domain: string, _payload: string, signature: string) => { if (signature !== 'b'.repeat(64)) throw new Error('forged authorization'); };
   const relayDiversifier = BigInt(`0x${randomBytes(8).toString('hex')}`).toString();
   const candidate = { allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: relayDiversifier, validatedAt: new Date().toISOString(), sourceNotBeforeHeight: 500, state: 'AVAILABLE' as const };
-  await settlements.reserveValidatedAllocation(request.id, 'operator-relay-test', authorizationId, verifyAuthorization, candidate); await settlements.publishPaymentInstructions(request.id, 'operator-relay-test');
+  await reserveTestAllocation(settlements, request.id, 'operator-relay-test', authorizationId, verifyAuthorization, candidate); await settlements.publishPaymentInstructions(request.id, 'operator-relay-test');
   const started = Date.now(); const transactionId = testOnlyTransaction('relay-source', request.id);
   const detectionJob = await relay.createSourceJob({ orderId: request.id, transactionId, phase: 'SOURCE_DETECTION', verifierId }, started);
   const challenge = await relay.claim(verifierId, started + 1_000, 10_000); assert.ok(challenge); verifyRelayChallenge(challenge, coordinator.publicKey, verifierId, started + 1_000);
@@ -139,7 +244,7 @@ test('TEST-ONLY private verifier relay survives leases, rejects replay, applies 
   await settlements.acceptRequest(unresolvedRequest.id, 'operator-relay-test', unresolvedRequest.destinationRecipient, async () => 'a'.repeat(64), started + 20_001);
   const unresolvedAuthorization = await settlements.issueAuthorization(unresolvedRequest.id, 'ADDRESS_ALLOCATION', 'operator-relay-test', async () => 'b'.repeat(64), started + 20_002);
   const unresolvedCandidate = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (BigInt(relayDiversifier) + 1n).toString() };
-  await settlements.reserveValidatedAllocation(unresolvedRequest.id, 'operator-relay-test', unresolvedAuthorization, verifyAuthorization, unresolvedCandidate, started + 20_003); await settlements.publishPaymentInstructions(unresolvedRequest.id, 'operator-relay-test', started + 20_004);
+  await reserveTestAllocation(settlements, unresolvedRequest.id, 'operator-relay-test', unresolvedAuthorization, verifyAuthorization, unresolvedCandidate, started + 20_003); await settlements.publishPaymentInstructions(unresolvedRequest.id, 'operator-relay-test', started + 20_004);
   const unresolvedTx = testOnlyTransaction('relay-unresolved', unresolvedRequest.id); const unresolvedJob = await relay.createSourceJob({ orderId: unresolvedRequest.id, transactionId: unresolvedTx, phase: 'SOURCE_DETECTION', verifierId }, started + 21_000);
   const unresolvedChallenge = await relay.claim(verifierId, started + 22_000); assert.ok(unresolvedChallenge);
   const unresolvedPayload: RelayEvidencePayload = { version: 1, jobId: unresolvedJob, verifierId, phase: 'SOURCE_DETECTION', nonce: unresolvedChallenge.payload.nonce, orderId: unresolvedRequest.id, manifestFingerprint: unresolvedChallenge.payload.manifestFingerprint, requestFingerprint: relayFingerprint(unresolvedChallenge.payload.request), observedAt: new Date(started + 23_000).toISOString(), expiresAt: new Date(started + 60_000).toISOString(), outcome: 'UNRESOLVED', reasonCode: 'RPC_UNAVAILABLE' };

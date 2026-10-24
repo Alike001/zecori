@@ -8,7 +8,6 @@ import { createOperatorOrderBinding, type OperatorOrderBinding } from '../src/li
 import { executeAuthorizedAddressAllocation } from './operator-actions.ts';
 import { FileOrderStore } from './order-api.ts';
 import { exactDiversifier, OperatorControlStore } from './operator-control.ts';
-import type { RpcCall } from './rpc-client.ts';
 
 const recipient = `0x${'2'.repeat(40)}`;
 
@@ -28,19 +27,6 @@ async function prepare(f: Awaited<ReturnType<typeof fixture>>, orderId: string, 
   return binding;
 }
 
-function rpcFor(address: string, index: string, onDerive?: () => void): RpcCall {
-  return async <T>(method: string) => {
-    const values: Record<string, unknown> = {
-      getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
-      getwalletinfo: { scanning: false, enhanced_through: 500, unlocked_until: 0 },
-      getaddressinfo: { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: index },
-      z_listtransactions: [],
-    };
-    if (method === 'z_getaddressforaccount') { onDerive?.(); return { address, diversifier_index: index, receiver_types: ['orchard'] } as T; }
-    return values[method] as T;
-  };
-}
-
 test('keeps diversifiers exact beyond JavaScript safe integer range', () => {
   assert.equal(exactDiversifier('900719925474099312345'), '900719925474099312345');
   assert.throws(() => exactDiversifier(((1n << 88n)).toString()), /88-bit/);
@@ -58,29 +44,8 @@ test('binds signed address authorization to one immutable order manifest', async
   await assert.rejects(f.controls.authorize({ action: 'ADDRESS_ALLOCATION', target: `order:${orderId}`, operatorId: 'operator-1', orderBinding: binding, now: 1_900_000_002_000 }), /already in progress/);
 });
 
-test('recovers the same derivation after expiry and at every durable crash point', async () => {
-  const scenarios = [
-    { orderId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', index: '900719925474099312345', address: 'utest1freshorchardreceiver123456789', crash: 'pending' },
-    { orderId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc', index: '900719925474099312346', address: 'utest1freshorchardreceiver223456789', crash: 'derived' },
-    { orderId: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', index: '900719925474099312347', address: 'utest1freshorchardreceiver323456789', crash: 'bound' },
-  ] as const;
-  for (const scenario of scenarios) {
-    const f = await fixture(); const now = Date.now() - 5_000; const binding = await prepare(f, scenario.orderId, now);
-    const id = await f.controls.authorize({ action: 'ADDRESS_ALLOCATION', target: `order:${scenario.orderId}`, operatorId: 'operator-1', orderBinding: binding, diversifierIndex: scenario.index, ttlSeconds: 1, now });
-    await f.controls.begin({ authorizationId: id, action: 'ADDRESS_ALLOCATION', target: `order:${scenario.orderId}`, operatorId: 'operator-1', orderBinding: binding, now: now + 500 });
-    if (scenario.crash === 'derived' || scenario.crash === 'bound') await f.controls.recordDerived(id, scenario.address, scenario.index, now + 600);
-    if (scenario.crash === 'bound') {
-      const record = (await f.controls.inspect()).allocations[0];
-      await f.orders.bindReceivingAddressToPreparedOrder(scenario.orderId, scenario.address, async () => ({ allocationId: record.allocationId, address: scenario.address, diversifierIndex: scenario.index, validatedAt: new Date(now).toISOString(), sourceNotBeforeHeight: 501, state: 'AVAILABLE' }), now + 700);
-    }
-    let derivations = 0;
-    const allocationId = await executeAuthorizedAddressAllocation({ authorizationId: id, orderId: scenario.orderId, operatorId: 'operator-1', controls: f.controls, orders: f.orders, rpc: rpcFor(scenario.address, scenario.index, () => { derivations += 1; }) });
-    assert.equal(derivations, scenario.crash === 'pending' ? 1 : 0);
-    assert.equal((await f.controls.inspect()).allocations[0].state, 'RESERVED');
-    assert.equal((await f.orders.operatorOrderManifest(scenario.orderId)).allocationId, allocationId);
-    assert.equal((await f.orders.operatorSnapshot()).allocationCounts.assigned, 1);
-    assert.equal(await executeAuthorizedAddressAllocation({ authorizationId: id, orderId: scenario.orderId, operatorId: 'operator-1', controls: f.controls, orders: f.orders, rpc: rpcFor(scenario.address, scenario.index) }), allocationId);
-  }
+test('legacy JSON allocation executor is disabled in favor of PostgreSQL recovery', async () => {
+  await assert.rejects(executeAuthorizedAddressAllocation({ authorizationId: 'legacy', orderId: 'legacy-order', operatorId: 'operator-1' }), /Legacy JSON address allocation is disabled/);
 });
 
 test('expired unstarted authorization can be replaced but payout authorization still expires closed', async () => {
@@ -94,15 +59,6 @@ test('expired unstarted authorization can be replaced but payout authorization s
   await assert.rejects(f.controls.begin({ authorizationId: payout, action: 'PAYOUT_APPROVAL', target: 'owner:order', operatorId: 'operator-1', now: now + 2_000 }), /expired/);
 });
 
-test('an interrupted derivation is reconciled after order expiry without activating payment', async () => {
-  const f = await fixture(); const preparedAt = Date.now() - 120_000; const orderId = 'ffffffff-ffff-4fff-8fff-ffffffffffff';
-  const binding = createOperatorOrderBinding({ orderId, destinationRecipient: recipient, expiresAt: new Date(Date.now() - 60_000).toISOString(), now: preparedAt });
-  const signature = await f.controls.signOrderManifest(binding, 'operator-1');
-  await f.orders.prepareOperatorOrder(binding, 'operator-1', signature, preparedAt);
-  const id = await f.controls.authorize({ action: 'ADDRESS_ALLOCATION', target: `order:${orderId}`, operatorId: 'operator-1', orderBinding: binding, diversifierIndex: '88', ttlSeconds: 1, now: preparedAt });
-  await f.controls.begin({ authorizationId: id, action: 'ADDRESS_ALLOCATION', target: `order:${orderId}`, operatorId: 'operator-1', orderBinding: binding, now: preparedAt + 500 });
-  await f.controls.recordDerived(id, 'utest1expiredrecoveryreceiver123456789', '88', preparedAt + 600);
-  await executeAuthorizedAddressAllocation({ authorizationId: id, orderId, operatorId: 'operator-1', controls: f.controls, orders: f.orders, rpc: rpcFor('utest1expiredrecoveryreceiver123456789', '88') });
-  assert.equal((await f.orders.operatorSnapshot()).orders[0].status, 'FAILED');
-  assert.equal((await f.orders.operatorOrderManifest(orderId)).state, 'ADDRESS_ALLOCATED');
+test('legacy JSON recovery cannot mutate an expired prepared order', async () => {
+  await assert.rejects(executeAuthorizedAddressAllocation({ authorizationId: 'expired', orderId: 'expired-order', operatorId: 'operator-1' }), /PostgreSQL settlement operator/);
 });

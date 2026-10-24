@@ -7,7 +7,13 @@ const { Pool } = pg;
 
 export function createPostgresPool(databaseUrl = process.env.DATABASE_URL): pg.Pool {
   if (!databaseUrl) throw new Error('DATABASE_URL is required');
-  return new Pool({ connectionString: databaseUrl, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000 });
+  const pool = new Pool({ connectionString: databaseUrl, max: 10, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 5_000 });
+  // PostgreSQL restarts terminate idle sockets. Without an error listener node-postgres
+  // treats that expected pool event as uncaught and terminates the API process.
+  pool.on('error', () => {
+    process.stderr.write(`${JSON.stringify({ level: 'error', event: 'postgres_idle_client_disconnected' })}\n`);
+  });
+  return pool;
 }
 
 export async function migrateDatabase(pool: pg.Pool): Promise<string[]> {

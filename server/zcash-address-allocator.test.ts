@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateUnusedWalletBAddress, WALLET_B_ADDRESS_ALLOCATION_PLAN } from './zcash-address-allocator.ts';
+import { deriveExactOrchardAddress, validateUnusedWalletBAddress, validateUnusedWalletBDiversifier, WALLET_B_ADDRESS_ALLOCATION_PLAN } from './zcash-address-allocator.ts';
 import type { RpcCall } from './rpc-client.ts';
 
 const address = 'utest1freshorchardreceiver123456789';
@@ -12,6 +12,7 @@ function rpc(history: unknown[] = [], overrides: Record<string, unknown> = {}): 
     getwalletinfo: { scanning: false, enhanced_through: 500, unlocked_until: 0 },
     getaddressinfo: { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: '42' },
     z_listtransactions: history,
+    z_getaddressforaccount: { address, diversifier_index: '42', receiver_types: ['orchard'] },
     ...overrides,
   };
   return { methods, call: async <T>(method: string) => { methods.push(method); return values[method] as T; } };
@@ -21,6 +22,16 @@ test('prepares but never executes the wallet-mutating derivation operation', () 
   assert.equal(WALLET_B_ADDRESS_ALLOCATION_PLAN.rpcMethodRequiringOperatorApproval, 'z_getaddressforaccount');
   assert.deepEqual(WALLET_B_ADDRESS_ALLOCATION_PLAN.receiverTypes, ['orchard']);
   assert.equal(WALLET_B_ADDRESS_ALLOCATION_PLAN.mutationEnabled, false);
+  assert.equal(WALLET_B_ADDRESS_ALLOCATION_PLAN.guardedOperatorCommandAvailable, true);
+});
+
+test('checks an exact unused diversifier before journaling and derives only that Orchard index', async () => {
+  const mock = rpc();
+  await validateUnusedWalletBDiversifier('900719925474099312345', { rpc: mock.call });
+  const derived = await deriveExactOrchardAddress('42', mock.call);
+  assert.deepEqual(derived, { address, diversifierIndex: '42' });
+  await assert.rejects(validateUnusedWalletBDiversifier('42', { rpc: rpc([{ diversifier_index: '42' }]).call }), /prior wallet payment history/);
+  await assert.rejects(deriveExactOrchardAddress('42', rpc([], { z_getaddressforaccount: { address, diversifier_index: '43', receiver_types: ['orchard'] } }).call), /does not match/);
 });
 
 test('validates a fresh owned Orchard-only address and records a future-height boundary', async () => {

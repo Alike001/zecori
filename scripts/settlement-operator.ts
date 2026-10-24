@@ -3,7 +3,7 @@ import { createPostgresPool } from '../server/postgres.ts';
 import { loadEncryptionKeyring } from '../server/data-encryption.ts';
 import { PostgresSettlementStore } from '../server/postgres-settlement-store.ts';
 import { OperatorControlStore, inspectOperatorKey } from '../server/operator-control.ts';
-import { validateUnusedWalletBAddress } from '../server/zcash-address-allocator.ts';
+import { executePostgresAddressAllocation } from '../server/postgres-address-allocation.ts';
 import { verifyZcashTransaction } from '../server/zcash-verifier.ts';
 import { verifyBaseSepoliaTransaction } from '../server/base-sepolia-verifier.ts';
 import { PrivateVerificationRelay } from '../server/private-verification-relay.ts';
@@ -28,9 +28,9 @@ const pool = command === 'help' ? undefined : createPostgresPool();
 try {
   if (command === 'help') {
     print({
-      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'reserve-validated-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
+      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
       confirmation: 'Every mutation requires --confirm "EXECUTE COMMAND-NAME" in an interactive terminal.',
-      safety: 'No command derives an address, unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds.',
+      safety: 'allocate-address is the only wallet-mutating command and requires a scoped authorization plus a durable PostgreSQL journal. No command unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds.',
     });
   } else {
     const encryption = await loadEncryptionKeyring(); const store = new PostgresSettlementStore(pool!, encryption); const controls = new OperatorControlStore();
@@ -43,13 +43,21 @@ try {
         const result = await store.acceptRequest(requestId, operator, required(options.recipient, 'Operator-confirmed destination recipient'), (binding, id) => controls.signOrderManifest(binding, id));
         print({ stage: 'REQUEST_ACCEPTED', orderId: result.orderId, manifestSigned: true, signatureDisplayed: false }); break;
       }
-      case 'orders': { const snapshot = await store.operatorSnapshot(); print({ ...snapshot, orders: snapshot.orders.map(item => ({ ...item, id: masked(item.id) })) }); break; }
+      case 'orders': { const snapshot = await store.operatorSnapshot(); print({ ...snapshot, orders: snapshot.orders.map(item => ({ ...item, id: masked(item.id) })), pendingAllocationOperations: snapshot.pendingAllocationOperations.map(item => ({ ...item, allocationId: masked(item.allocationId), orderId: masked(item.orderId), authorizationId: masked(item.authorizationId) })) }); break; }
       case 'authorize-allocation': { const id = await store.issueAuthorization(required(options.order, 'Order ID'), 'ADDRESS_ALLOCATION', required(operatorId, 'Operator ID'), (domain, value) => controls.signOperatorPayload(domain, value)); print({ authorizationId: id, action: 'ADDRESS_ALLOCATION', executionPerformed: false }); break; }
-      case 'reserve-validated-allocation': {
-        const orderId = required(options.order, 'Order ID'); const receiver = required(options.receiver, 'Existing Orchard receiver');
-        const candidate = await validateUnusedWalletBAddress(receiver);
-        const allocationId = await store.reserveValidatedAllocation(orderId, required(operatorId, 'Operator ID'), required(options.authorization, 'Authorization ID'), (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature), candidate);
-        print({ stage: 'ALLOCATION_RESERVED', orderId, allocationId, receiverDisplayed: false, derivedByCommand: false }); break;
+      case 'allocate-address':
+      case 'reconcile-allocation': {
+        const orderId = required(options.order, 'Order ID'); const authorizationId = required(options.authorization, 'Authorization ID');
+        const allocationId = await executePostgresAddressAllocation({
+          store, orderId, authorizationId, operatorId: required(operatorId, 'Operator ID'),
+          verifyAuthorization: (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature),
+          mode: command === 'reconcile-allocation' ? 'RECONCILE' : 'EXECUTE',
+        });
+        print({ stage: 'ALLOCATION_RESERVED', orderId, allocationId, receiverDisplayed: false, sameJournaledDiversifier: true }); break;
+      }
+      case 'cancel-allocation': {
+        await store.cancelAddressAllocation(required(options.order, 'Order ID'), required(options.authorization, 'Authorization ID'), required(operatorId, 'Operator ID'), (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature), required(options.reason, 'Cancellation reason'));
+        print({ stage: 'ALLOCATION_CANCELLED_BEFORE_RPC', receiverDerived: false }); break;
       }
       case 'publish-instructions': await store.publishPaymentInstructions(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYMENT_INSTRUCTIONS_PUBLISHED' }); break;
       case 'relay-source-detect':

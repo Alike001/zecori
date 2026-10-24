@@ -17,10 +17,10 @@ async function visit(folder) {
       const source = await readFile(full, 'utf8');
       for (const pattern of banned) if (pattern.test(source)) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
       if (walletMutationCalls.test(source)) {
-        const authorizedModule = full === join('server', 'operator-actions.ts');
-        const guarded = source.includes("controls.begin({ authorizationId: input.authorizationId, action: 'ADDRESS_ALLOCATION'")
-          && source.includes('exactJsonInteger(record.diversifierIndex)')
-          && source.includes('completeAddressAllocation');
+        const authorizedModule = full === join('server', 'zcash-address-allocator.ts');
+        const guarded = source.includes("rpc<DerivedAddress>('z_getaddressforaccount'")
+          && source.includes('exactJsonInteger(exact)')
+          && source.includes('returnedIndex !== exact');
         if (!authorizedModule || !guarded) throw new Error(`Unauthorized wallet-mutating address RPC call appears in ${full}`);
       }
       if (full.startsWith(`src${process.platform === 'win32' ? '\\' : '/'}`) && /console\.(?:log|debug|info|warn|error)\s*\(/.test(source)) throw new Error(`Frontend logging appears in ${full}`);
@@ -29,4 +29,4 @@ async function visit(folder) {
 }
 await visit('src');
 await visit('server');
-console.log('Safety gate passed: no financial execution methods or frontend logging; address derivation is confined to the guarded operator action module.');
+console.log('Safety gate passed: no financial execution methods or frontend logging; exact-index address derivation is confined to the guarded allocator module.');

@@ -28,12 +28,18 @@ type AuthorizationVerifier = (domain: 'allocation-authorization-v1' | 'payout-au
 type OrderRow = {
   order_id: string; owner_session_hash: Buffer; immutable_manifest: { binding: OperatorOrderBinding; requestId: string };
   public_view: Record<string, unknown>; encrypted_private_state: Buffer; encryption_key_version: number;
-  status: PaymentOrder['status']; state_version: string; created_at: Date; expires_at: Date;
+  status: PaymentOrder['status']; state_version: string; created_at: Date; expires_at: Date; accepted_by: string;
 };
 
 export type PendingRequest = {
   requestId: string; createdAt: string; expiresAt: string; destinationRecipient: string;
   terms: typeof PUBLIC_ROUTE_TERMS;
+};
+
+export type AddressAllocationPhase = 'JOURNALED' | 'DERIVATION_STARTED' | 'RPC_UNCERTAIN' | 'DERIVED' | 'RESERVED' | 'RECOVERY_REQUIRED' | 'CANCELLED';
+export type AddressAllocationOperation = {
+  allocationId: string; authorizationId: string; orderId: string; operatorId: string;
+  diversifierIndex: string; phase: AddressAllocationPhase; rpcAttemptCount: number; address?: string;
 };
 
 function ownerHash(ownerId: string): Buffer { return createHash('sha256').update(ownerId).digest(); }
@@ -75,8 +81,8 @@ export class PostgresSettlementStore {
   constructor(pool: Pool, encryption: DataEncryption) { this.pool = pool; this.encryption = encryption; }
 
   async health(): Promise<void> {
-    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay']]);
-    if (result.rowCount !== 2) throw new Error('Settlement or private relay migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation']]);
+    if (result.rowCount !== 3) throw new Error('Settlement, private relay, or crash-safe allocation migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
@@ -138,27 +144,165 @@ export class PostgresSettlementStore {
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
 
-  async reserveValidatedAllocation(orderId: string, operatorId: string, authorizationId: string, verifier: AuthorizationVerifier, candidate: ValidatedReceivingAddress, now = Date.now()): Promise<string> {
-    if (candidate.state !== 'AVAILABLE') throw new Error('Allocation must be independently validated as available');
+  async beginAddressAllocation(orderId: string, operatorId: string, authorizationId: string, diversifierIndex: string, verifier: AuthorizationVerifier, now = Date.now()): Promise<AddressAllocationOperation> {
+    if (!/^\d+$/.test(diversifierIndex)) throw new Error('Diversifier index must be an unsigned decimal integer');
+    diversifierIndex = BigInt(diversifierIndex).toString();
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       const row = await this.lockOrder(client, orderId);
-      if (row.status !== 'CREATED') throw new Error('Order is not awaiting allocation');
-      await this.consumeAuthorization(client, row, 'ADDRESS_ALLOCATION', authorizationId, operatorId, verifier, now);
+      const existing = await client.query<{
+        allocation_id: string; authorization_id: string; journal_phase: AddressAllocationPhase; encrypted_derivation: Buffer;
+        encrypted_receiver: Buffer | null; rpc_attempt_count: number;
+      }>(`SELECT allocation_id,authorization_id,journal_phase,encrypted_derivation,encrypted_receiver,rpc_attempt_count
+          FROM address_allocation_journal WHERE order_id=$1 FOR UPDATE`, [orderId]);
+      if (existing.rows[0]) {
+        await this.verifyAuthorization(client, row, 'ADDRESS_ALLOCATION', authorizationId, operatorId, verifier, ['IN_PROGRESS','CONSUMED'], now);
+        const operation = this.allocationOperation(existing.rows[0], row, operatorId);
+        if (operation.authorizationId !== authorizationId || operation.diversifierIndex !== diversifierIndex) throw new Error('Order already has a different durable allocation operation');
+        await client.query('COMMIT');
+        return operation;
+      }
+      if (row.status !== 'CREATED' || row.expires_at.getTime() <= now) throw new Error('Order is not an unexpired accepted order awaiting allocation');
+      await this.validateAcceptedOrder(client, row, operatorId, now);
+      await this.startAllocationAuthorization(client, row, authorizationId, operatorId, verifier, now);
       const manifest = row.immutable_manifest.binding;
-      if (manifest.orderId !== orderId) throw new Error('Order manifest identity mismatch');
-      const order = createOrder({ allocationId: candidate.allocationId, destinationRecipient: manifest.destinationRecipient, sourceAmountZat: manifest.sourceAmountZat, expiresAt: manifest.expiresAt, providerId: manifest.providerId }, {
-        allocationId: candidate.allocationId, sourceReceiver: candidate.address, sourceDiversifierIndex: candidate.diversifierIndex, sourceNotBeforeHeight: candidate.sourceNotBeforeHeight,
-      }, row.created_at.getTime(), orderId);
-      const encryptedReceiver = this.encryption.encrypt({ receiver: candidate.address, diversifierIndex: candidate.diversifierIndex }, `allocation:${candidate.allocationId}:receiver`);
+      validateOperatorOrderBinding(manifest, now);
+      const allocationId = randomUUID();
       await client.query(`INSERT INTO address_allocation_journal
-        (allocation_id, order_id, address_fingerprint, diversifier_fingerprint, encrypted_receiver, encryption_key_version, source_not_before_height, journal_phase, created_at, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,'RESERVED',$8,$8)`, [candidate.allocationId, orderId, fingerprint(candidate.address), fingerprint(candidate.diversifierIndex), encryptedReceiver, this.encryption.activeVersion, candidate.sourceNotBeforeHeight, new Date(now)]);
-      await this.updateOrder(client, row, order, now);
-      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_RESERVED', { allocationId: candidate.allocationId, authorizationId, validation: 'independent-wallet-rpc' });
+        (allocation_id,order_id,authorization_id,diversifier_fingerprint,encrypted_derivation,encryption_key_version,journal_phase,created_at,updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,'JOURNALED',$7,$7)`, [
+        allocationId, orderId, authorizationId, fingerprint(diversifierIndex),
+        this.encryption.encrypt({ diversifierIndex }, `allocation:${allocationId}:derivation`), this.encryption.activeVersion, new Date(now),
+      ]);
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_DIVERSIFIER_JOURNALED', { allocationId, authorizationId, rpcAttempted: false });
       await client.query('COMMIT');
-      return candidate.allocationId;
+      return { allocationId, authorizationId, orderId, operatorId, diversifierIndex, phase: 'JOURNALED', rpcAttemptCount: 0 };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async addressAllocationOperation(orderId: string, authorizationId: string, operatorId: string): Promise<AddressAllocationOperation> {
+    const result = await this.pool.query<{
+      allocation_id: string; authorization_id: string; journal_phase: AddressAllocationPhase; encrypted_derivation: Buffer;
+      encrypted_receiver: Buffer | null; rpc_attempt_count: number; accepted_by: string;
+    }>(`SELECT j.allocation_id,j.authorization_id,j.journal_phase,j.encrypted_derivation,j.encrypted_receiver,j.rpc_attempt_count,o.accepted_by
+        FROM address_allocation_journal j JOIN orders o ON o.order_id=j.order_id
+        WHERE j.order_id=$1 AND j.authorization_id=$2`, [orderId, authorizationId]);
+    const record = result.rows[0];
+    if (!record) throw new Error('Allocation recovery record not found');
+    return this.allocationOperation(record, { order_id: orderId, accepted_by: record.accepted_by } as OrderRow, operatorId);
+  }
+
+  async authenticateAddressAllocation(orderId: string, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, now = Date.now()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      const journal = await client.query('SELECT 1 FROM address_allocation_journal WHERE order_id=$1 AND authorization_id=$2 FOR UPDATE', [orderId, authorizationId]);
+      if (journal.rowCount !== 1) throw new Error('Allocation recovery record not found');
+      await this.verifyAuthorization(client, row, 'ADDRESS_ALLOCATION', authorizationId, operatorId, verifier, ['IN_PROGRESS','CONSUMED'], now);
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async markAddressDerivationStarted(orderId: string, authorizationId: string, operatorId: string, now = Date.now()): Promise<AddressAllocationOperation> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      const selected = await client.query<any>(`SELECT * FROM address_allocation_journal WHERE order_id=$1 AND authorization_id=$2 FOR UPDATE`, [orderId, authorizationId]);
+      const record = selected.rows[0]; if (!record) throw new Error('Allocation recovery record not found');
+      const operation = this.allocationOperation(record, row, operatorId);
+      if (operation.phase === 'RESERVED' || operation.phase === 'DERIVED') { await client.query('COMMIT'); return operation; }
+      if (!['JOURNALED','DERIVATION_STARTED','RPC_UNCERTAIN','RECOVERY_REQUIRED'].includes(operation.phase)) throw new Error('Allocation operation cannot call the wallet RPC from its current state');
+      const updated = await client.query<{ rpc_attempt_count: number }>(`UPDATE address_allocation_journal SET journal_phase='DERIVATION_STARTED',rpc_attempt_count=rpc_attempt_count+1,rpc_attempted_at=$3,last_error_code=NULL,updated_at=$3 WHERE order_id=$1 AND authorization_id=$2 RETURNING rpc_attempt_count`, [orderId, authorizationId, new Date(now)]);
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_DERIVATION_ATTEMPT_STARTED', { allocationId: operation.allocationId, authorizationId, attempt: updated.rows[0].rpc_attempt_count, sameJournaledDiversifier: true });
+      await client.query('COMMIT'); return { ...operation, phase: 'DERIVATION_STARTED', rpcAttemptCount: updated.rows[0].rpc_attempt_count };
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async markAddressDerivationUncertain(orderId: string, authorizationId: string, operatorId: string, errorCode: string, now = Date.now()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      if (row.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
+      const changed = await client.query(`UPDATE address_allocation_journal SET journal_phase='RPC_UNCERTAIN',last_error_code=$3,updated_at=$4 WHERE order_id=$1 AND authorization_id=$2 AND journal_phase='DERIVATION_STARTED'`, [orderId, authorizationId, errorCode, new Date(now)]);
+      if (changed.rowCount !== 1) throw new Error('Allocation operation is not an in-flight derivation');
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_DERIVATION_UNCERTAIN', { authorizationId, errorCode, replacementForbidden: true });
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async markAddressRecoveryRequired(orderId: string, authorizationId: string, operatorId: string, errorCode: string, now = Date.now()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      if (row.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
+      const changed = await client.query(`UPDATE address_allocation_journal SET journal_phase='RECOVERY_REQUIRED',last_error_code=$3,updated_at=$4 WHERE order_id=$1 AND authorization_id=$2 AND journal_phase IN ('DERIVATION_STARTED','DERIVED')`, [orderId, authorizationId, errorCode, new Date(now)]);
+      if (changed.rowCount !== 1) throw new Error('Allocation operation cannot enter recovery from its current state');
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_RECOVERY_REQUIRED', { authorizationId, errorCode, replacementForbidden: true });
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async recordDerivedAddress(orderId: string, authorizationId: string, operatorId: string, address: string, diversifierIndex: string, now = Date.now()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      const selected = await client.query<any>(`SELECT * FROM address_allocation_journal WHERE order_id=$1 AND authorization_id=$2 FOR UPDATE`, [orderId, authorizationId]);
+      const record = selected.rows[0]; if (!record) throw new Error('Allocation recovery record not found');
+      const operation = this.allocationOperation(record, row, operatorId);
+      if (operation.diversifierIndex !== BigInt(diversifierIndex).toString()) throw new Error('Derived diversifier does not match the journaled index');
+      if (operation.phase === 'DERIVED' || operation.phase === 'RESERVED') {
+        if (operation.address !== address) throw new Error('Recorded derivation does not match the wallet response');
+        await client.query('COMMIT'); return;
+      }
+      if (operation.phase !== 'DERIVATION_STARTED') throw new Error('Allocation operation is not an in-flight derivation');
+      await client.query(`UPDATE address_allocation_journal SET journal_phase='DERIVED',address_fingerprint=$3,encrypted_receiver=$4,derived_at=$5,last_error_code=NULL,updated_at=$5 WHERE order_id=$1 AND authorization_id=$2`, [
+        orderId, authorizationId, fingerprint(address), this.encryption.encrypt({ receiver: address, diversifierIndex: operation.diversifierIndex }, `allocation:${operation.allocationId}:receiver`), new Date(now),
+      ]);
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_DERIVED_RECORDED', { allocationId: operation.allocationId, authorizationId, receiverDisplayed: false });
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async reserveDerivedAddress(orderId: string, operatorId: string, authorizationId: string, candidate: ValidatedReceivingAddress, now = Date.now()): Promise<string> {
+    if (candidate.state !== 'AVAILABLE') throw new Error('Allocation must be independently validated as available');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      const selected = await client.query<any>(`SELECT * FROM address_allocation_journal WHERE order_id=$1 AND authorization_id=$2 FOR UPDATE`, [orderId, authorizationId]);
+      const record = selected.rows[0]; if (!record) throw new Error('Allocation recovery record not found');
+      const operation = this.allocationOperation(record, row, operatorId);
+      if (operation.phase === 'RESERVED') { await client.query('COMMIT'); return operation.allocationId; }
+      if (operation.phase !== 'DERIVED' || !operation.address || operation.address !== candidate.address || operation.diversifierIndex !== candidate.diversifierIndex || operation.allocationId !== candidate.allocationId) throw new Error('Validated receiver does not match the durable derived allocation');
+      if (row.status !== 'CREATED') throw new Error('Order is not awaiting allocation');
+      const manifest = row.immutable_manifest.binding; validateOperatorOrderBinding(manifest, row.created_at.getTime());
+      const order = createOrder({ allocationId: operation.allocationId, destinationRecipient: manifest.destinationRecipient, sourceAmountZat: manifest.sourceAmountZat, expiresAt: manifest.expiresAt, providerId: manifest.providerId }, {
+        allocationId: operation.allocationId, sourceReceiver: candidate.address, sourceDiversifierIndex: candidate.diversifierIndex, sourceNotBeforeHeight: candidate.sourceNotBeforeHeight,
+      }, row.created_at.getTime(), orderId);
+      await this.updateOrder(client, row, order, now);
+      await client.query(`UPDATE address_allocation_journal SET journal_phase='RESERVED',source_not_before_height=$3,reserved_at=$4,updated_at=$4 WHERE order_id=$1 AND authorization_id=$2`, [orderId, authorizationId, candidate.sourceNotBeforeHeight, new Date(now)]);
+      const consumed = await client.query(`UPDATE authorization_records SET state='CONSUMED',consumed_at=$2,updated_at=$2 WHERE authorization_id=$1 AND state='IN_PROGRESS'`, [authorizationId, new Date(now)]);
+      if (consumed.rowCount !== 1) throw new Error('Allocation authorization is not in progress');
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_RESERVED', { allocationId: operation.allocationId, authorizationId, validation: 'independent-wallet-rpc' });
+      await client.query('COMMIT'); return operation.allocationId;
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async cancelAddressAllocation(orderId: string, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, reason: string, now = Date.now()): Promise<void> {
+    if (!reason.trim()) throw new Error('Cancellation reason is required');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN'); const row = await this.lockOrder(client, orderId);
+      const selected = await client.query<any>(`SELECT * FROM address_allocation_journal WHERE order_id=$1 AND authorization_id=$2 FOR UPDATE`, [orderId, authorizationId]);
+      const record = selected.rows[0]; if (!record) throw new Error('Allocation recovery record not found');
+      const operation = this.allocationOperation(record, row, operatorId);
+      if (operation.phase === 'CANCELLED') { await client.query('COMMIT'); return; }
+      if (operation.phase !== 'JOURNALED' || operation.rpcAttemptCount !== 0 || record.rpc_attempted_at) throw new Error('An allocation can be cancelled only when no wallet RPC attempt has begun; reconcile it instead');
+      await this.verifyAuthorization(client, row, 'ADDRESS_ALLOCATION', authorizationId, operatorId, verifier, ['IN_PROGRESS'], now);
+      await client.query(`UPDATE address_allocation_journal SET journal_phase='CANCELLED',cancelled_at=$3,cancellation_reason=$4,updated_at=$3 WHERE order_id=$1 AND authorization_id=$2`, [orderId, authorizationId, new Date(now), reason.trim()]);
+      await client.query(`UPDATE authorization_records SET state='CANCELLED',updated_at=$2 WHERE authorization_id=$1 AND state='IN_PROGRESS'`, [authorizationId, new Date(now)]);
+      await this.audit(client, orderId, 'OPERATOR', operatorId, 'ALLOCATION_CANCELLED_BEFORE_RPC', { allocationId: operation.allocationId, authorizationId, reason: reason.trim() });
+      await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
 
@@ -330,10 +474,15 @@ export class PostgresSettlementStore {
   async operatorSnapshot() {
     const [orders, allocations, evidence] = await Promise.all([
       this.pool.query<{ order_id: string; status: PaymentOrder['status']; created_at: Date; expires_at: Date; public_view: Record<string, unknown> }>('SELECT order_id,status,created_at,expires_at,public_view FROM orders ORDER BY created_at'),
-      this.pool.query<{ journal_phase: string; count: string }>('SELECT journal_phase,count(*)::text AS count FROM address_allocation_journal GROUP BY journal_phase'),
+      this.pool.query<{ allocation_id: string; order_id: string; authorization_id: string; journal_phase: string; rpc_attempt_count: number; last_error_code: string | null; updated_at: Date }>('SELECT allocation_id,order_id,authorization_id,journal_phase,rpc_attempt_count,last_error_code,updated_at FROM address_allocation_journal ORDER BY created_at'),
       this.pool.query<{ count: string }>('SELECT count(*)::text AS count FROM replay_references'),
     ]);
-    return { orders: orders.rows.map(row => ({ id: row.order_id, status: row.status, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), payoutAuthorizationState: ((row.public_view.payoutAuthorization as { state?: string } | undefined)?.state ?? 'NOT_REQUESTED') })), allocationCounts: { available: 0, assigned: allocations.rows.reduce((sum, row) => sum + Number(row.count), 0) }, replayReferenceCount: Number(evidence.rows[0]?.count ?? 0) };
+    return {
+      orders: orders.rows.map(row => ({ id: row.order_id, status: row.status, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), payoutAuthorizationState: ((row.public_view.payoutAuthorization as { state?: string } | undefined)?.state ?? 'NOT_REQUESTED') })),
+      allocationCounts: { available: 0, assigned: allocations.rows.filter(row => ['RESERVED','ACTIVATED'].includes(row.journal_phase)).length },
+      pendingAllocationOperations: allocations.rows.filter(row => !['RESERVED','ACTIVATED','CANCELLED'].includes(row.journal_phase)).map(row => ({ allocationId: row.allocation_id, orderId: row.order_id, authorizationId: row.authorization_id, phase: row.journal_phase, rpcAttemptCount: row.rpc_attempt_count, lastErrorCode: row.last_error_code, updatedAt: row.updated_at.toISOString() })),
+      replayReferenceCount: Number(evidence.rows[0]?.count ?? 0),
+    };
   }
 
   private privateOrder(row: OrderRow): PaymentOrder { return this.encryption.decrypt<PaymentOrder>(row.encrypted_private_state, orderContext(row.order_id)); }
@@ -344,14 +493,47 @@ export class PostgresSettlementStore {
     if (result.rowCount !== 1) throw new Error('Concurrent order update rejected');
   }
   private async syncRequestStatus(client: PoolClient, orderId: string, status: PaymentOrder['status'], now: number): Promise<void> { await client.query('UPDATE public_order_requests SET status=$2,updated_at=$3 WHERE request_id=$1', [orderId, status === 'AWAITING_PAYMENT' ? 'PAYMENT_READY' : status, new Date(now)]); }
-  private async consumeAuthorization(client: PoolClient, order: OrderRow, kind: AuthorizationKind, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, now: number): Promise<void> {
-    const result = await client.query<{ state: string; operator_id: string; expires_at: Date; signed_payload: Record<string, unknown>; signature: Buffer; manifest_fingerprint: Buffer }>(`SELECT state,operator_id,expires_at,signed_payload,signature,manifest_fingerprint FROM authorization_records WHERE authorization_id=$1 AND order_id=$2 AND kind=$3 FOR UPDATE`, [authorizationId, order.order_id, kind]);
+  private allocationOperation(record: { allocation_id: string; authorization_id: string; journal_phase: AddressAllocationPhase; encrypted_derivation: Buffer; encrypted_receiver: Buffer | null; rpc_attempt_count: number }, order: Pick<OrderRow, 'order_id' | 'accepted_by'>, operatorId: string): AddressAllocationOperation {
+    if (order.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
+    const derivation = this.encryption.decrypt<{ diversifierIndex: string }>(record.encrypted_derivation, `allocation:${record.allocation_id}:derivation`);
+    const receiver = record.encrypted_receiver ? this.encryption.decrypt<{ receiver: string; diversifierIndex: string }>(record.encrypted_receiver, `allocation:${record.allocation_id}:receiver`) : undefined;
+    if (!/^\d+$/.test(derivation.diversifierIndex) || (receiver && receiver.diversifierIndex !== derivation.diversifierIndex)) throw new Error('Allocation recovery record is inconsistent');
+    return {
+      allocationId: record.allocation_id, authorizationId: record.authorization_id, orderId: order.order_id,
+      operatorId, diversifierIndex: BigInt(derivation.diversifierIndex).toString(), phase: record.journal_phase,
+      rpcAttemptCount: record.rpc_attempt_count, ...(receiver ? { address: receiver.receiver } : {}),
+    };
+  }
+  private async validateAcceptedOrder(client: PoolClient, order: OrderRow, operatorId: string, now: number): Promise<void> {
+    if (order.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
+    const requestResult = await client.query<{ owner_session_hash: Buffer; status: string; linked_order_id: string; destination_recipient: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS; expires_at: Date }>(`SELECT owner_session_hash,status,linked_order_id,destination_recipient,immutable_terms,expires_at FROM public_order_requests WHERE request_id=$1 FOR UPDATE`, [order.order_id]);
+    const request = requestResult.rows[0]; const manifest = order.immutable_manifest.binding;
+    if (!request || request.status !== 'ACCEPTED' || request.linked_order_id !== order.order_id || !request.owner_session_hash.equals(order.owner_session_hash)) throw new Error('Accepted order owner or request binding is invalid');
+    if (order.immutable_manifest.requestId !== order.order_id || manifest.orderId !== order.order_id) throw new Error('Order manifest identity mismatch');
+    if (request.destination_recipient.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order terms do not match the immutable request');
+    validateOperatorOrderBinding(manifest, now);
+  }
+  private async verifyAuthorization(client: PoolClient, order: OrderRow, kind: AuthorizationKind, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, allowedStates: string[], now: number) {
+    const result = await client.query<{ state: string; operator_id: string; expires_at: Date; target: string; signed_payload: Record<string, unknown>; signature: Buffer; manifest_fingerprint: Buffer }>(`SELECT state,operator_id,expires_at,target,signed_payload,signature,manifest_fingerprint FROM authorization_records WHERE authorization_id=$1 AND order_id=$2 AND kind=$3 FOR UPDATE`, [authorizationId, order.order_id, kind]);
     const authorization = result.rows[0]; if (!authorization) throw new Error('Operator authorization not found');
-    if (authorization.state !== 'ISSUED' || authorization.operator_id !== operatorId) throw new Error('Operator authorization is no longer usable or has the wrong identity');
-    if (authorization.expires_at.getTime() <= now) throw new Error('Operator authorization has expired');
+    if (!allowedStates.includes(authorization.state) || authorization.operator_id !== operatorId) throw new Error('Operator authorization is no longer usable or has the wrong identity');
+    if (authorization.state === 'ISSUED' && authorization.expires_at.getTime() <= now) throw new Error('Operator authorization has expired before the operation began');
     const manifestFingerprint = createHash('sha256').update(JSON.stringify(order.immutable_manifest)).digest();
     if (!manifestFingerprint.equals(authorization.manifest_fingerprint)) throw new Error('Operator authorization manifest binding is invalid');
-    await verifier(authorizationDomain(kind), canonicalAuthorization(authorization.signed_payload), authorization.signature.toString('hex'));
+    const payload = authorization.signed_payload;
+    if (payload.authorizationId !== authorizationId || payload.orderId !== order.order_id || payload.kind !== kind || payload.operatorId !== operatorId
+      || payload.manifestFingerprint !== manifestFingerprint.toString('hex') || payload.expiresAt !== authorization.expires_at.toISOString()
+      || authorization.target !== `order:${order.order_id}`) throw new Error('Operator authorization signed payload does not match its database scope');
+    await verifier(authorizationDomain(kind), canonicalAuthorization(payload), authorization.signature.toString('hex'));
+    return authorization;
+  }
+  private async startAllocationAuthorization(client: PoolClient, order: OrderRow, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, now: number): Promise<void> {
+    await this.verifyAuthorization(client, order, 'ADDRESS_ALLOCATION', authorizationId, operatorId, verifier, ['ISSUED'], now);
+    const started = await client.query(`UPDATE authorization_records SET state='IN_PROGRESS',updated_at=$2 WHERE authorization_id=$1 AND state='ISSUED'`, [authorizationId, new Date(now)]);
+    if (started.rowCount !== 1) throw new Error('Operator authorization was already started');
+  }
+  private async consumeAuthorization(client: PoolClient, order: OrderRow, kind: AuthorizationKind, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, now: number): Promise<void> {
+    await this.verifyAuthorization(client, order, kind, authorizationId, operatorId, verifier, ['ISSUED'], now);
     const consumed = await client.query(`UPDATE authorization_records SET state='CONSUMED',consumed_at=$2,updated_at=$2 WHERE authorization_id=$1 AND state='ISSUED'`, [authorizationId, new Date(now)]);
     if (consumed.rowCount !== 1) throw new Error('Operator authorization was already consumed');
   }
