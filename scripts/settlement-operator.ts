@@ -6,6 +6,8 @@ import { OperatorControlStore, inspectOperatorKey } from '../server/operator-con
 import { validateUnusedWalletBAddress } from '../server/zcash-address-allocator.ts';
 import { verifyZcashTransaction } from '../server/zcash-verifier.ts';
 import { verifyBaseSepoliaTransaction } from '../server/base-sepolia-verifier.ts';
+import { PrivateVerificationRelay } from '../server/private-verification-relay.ts';
+import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
 
 function parse(values: string[]): { command: string; options: Record<string, string> } {
   if (values[0] === '--') values.shift(); const [command = 'help', ...rest] = values; const options: Record<string, string> = {};
@@ -26,7 +28,7 @@ const pool = command === 'help' ? undefined : createPostgresPool();
 try {
   if (command === 'help') {
     print({
-      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'reserve-validated-allocation', 'publish-instructions', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
+      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'reserve-validated-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
       confirmation: 'Every mutation requires --confirm "EXECUTE COMMAND-NAME" in an interactive terminal.',
       safety: 'No command derives an address, unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds.',
     });
@@ -50,6 +52,22 @@ try {
         print({ stage: 'ALLOCATION_RESERVED', orderId, allocationId, receiverDisplayed: false, derivedByCommand: false }); break;
       }
       case 'publish-instructions': await store.publishPaymentInstructions(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYMENT_INSTRUCTIONS_PUBLISHED' }); break;
+      case 'relay-source-detect':
+      case 'relay-source-confirm': {
+        requirePrivateRelayTransport();
+        const verifierId = required(options.verifier ?? process.env.ZECATHON_RELAY_VERIFIER_ID, 'Verifier ID');
+        const [coordinatorKey, verifierKey, relayEncryption] = await Promise.all([loadRelayPrivateKey(process.env.ZECATHON_RELAY_COORDINATOR_PRIVATE_KEY_FILE), loadRelayPublicKey(process.env.ZECATHON_RELAY_VERIFIER_PUBLIC_KEY_FILE), loadEncryptionKeyring(process.env.ZECATHON_RELAY_ENCRYPTION_KEY_FILE)]);
+        const relay = new PrivateVerificationRelay(pool!, relayEncryption, coordinatorKey, new Map([[verifierId, verifierKey]]), encryption);
+        const jobId = await relay.createSourceJob({ orderId: required(options.order, 'Order ID'), transactionId: required(options.tx, 'Source transaction ID'), phase: command === 'relay-source-detect' ? 'SOURCE_DETECTION' : 'SOURCE_CONFIRMATION', verifierId });
+        print({ stage: 'PRIVATE_VERIFICATION_QUEUED', jobId, verifierId, evidenceDisplayed: false }); break;
+      }
+      case 'relay-apply': {
+        requirePrivateRelayTransport(); const jobId = required(options.job, 'Relay job ID'); const verifierId = required(options.verifier ?? process.env.ZECATHON_RELAY_VERIFIER_ID, 'Verifier ID');
+        const [relayEncryption, coordinatorPublicKey, verifierPublicKey] = await Promise.all([loadEncryptionKeyring(process.env.ZECATHON_RELAY_ENCRYPTION_KEY_FILE), loadRelayPublicKey(process.env.ZECATHON_RELAY_COORDINATOR_PUBLIC_KEY_FILE), loadRelayPublicKey(process.env.ZECATHON_RELAY_VERIFIER_PUBLIC_KEY_FILE)]);
+        const relay = new PrivateVerificationRelay(pool!, relayEncryption, undefined, new Map([[verifierId, verifierPublicKey]])); const envelope = await relay.verifiedMessage(jobId, coordinatorPublicKey);
+        if (envelope.payload.outcome === 'VERIFIED') await store.applyRelaySourceEvidence(jobId, envelope); else await store.applyRelayUnresolved(jobId, envelope);
+        print({ stage: envelope.payload.outcome === 'VERIFIED' ? 'PRIVATE_VERIFICATION_APPLIED' : 'ORDER_UNRESOLVED', jobId, evidenceDisplayed: false }); break;
+      }
       case 'observe-source': await store.observeSource(required(options.order, 'Order ID'), required(options.tx, 'Source transaction ID'), verifyZcashTransaction); print({ stage: 'SOURCE_EVIDENCE_RECORDED' }); break;
       case 'confirm-source': await store.confirmSource(required(options.order, 'Order ID'), verifyZcashTransaction); print({ stage: 'SOURCE_CONFIRMED' }); break;
       case 'queue-payout': await store.queuePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYOUT_AWAITING_APPROVAL', payoutPerformed: false }); break;

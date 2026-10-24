@@ -2,6 +2,8 @@
 
 This stack is a foundation for a hardened VPS deployment. It does not enable mainnet, wallet unlocking, address derivation, transaction signing, or payouts.
 
+The stack is not approved for public launch while the durable user-authentication/recovery blocker in [the authentication audit](production-authentication-audit.md) remains open.
+
 ## Architecture
 
 - Caddy is the only internet-facing service and obtains TLS certificates for `DOMAIN`.
@@ -42,6 +44,41 @@ node scripts/smoke-production.mjs https://$DOMAIN
 
 Do not mount the existing Wallet A or Wallet B data directories into these containers. The source verifier remains outside this public stack pending the watch-only compatibility gate in [production verifier architecture](production-verifier.md).
 
+## Production secrets checklist
+
+Provision each value independently; never reuse a key across roles.
+
+- PostgreSQL password: random, at least 32 bytes, Compose secret, recoverable from the encrypted infrastructure vault.
+- Database encryption keyring: versioned 32-byte AES keys, mode `0600`, directory mode `0700`, backed up separately from database dumps. Retain every version referenced by a row; rotate by adding a version and changing `activeVersion`, then re-encrypt in a reviewed maintenance operation before retiring an old key.
+- Relay message encryption keyring: a different versioned AES-256-GCM keyring shared only by the coordinator and operator verifier. It encrypts queued challenges/responses but cannot decrypt orders, receipts or allocations.
+- Receipt/operator HMAC key: operator host only; never in the web image, database keyring or verifier.
+- Base verifier token: isolated verifier secret only. Rotate after any suspected disclosure.
+- Relay coordinator Ed25519 private key: coordinator only. Store its public key on the operator host.
+- Relay verifier Ed25519 private key: operator verifier host only. Store its public key on the coordinator. The two private keys must never share a host or backup.
+- Caddy state: preserve `/data` for certificate continuity; no wallet material belongs in it.
+- No seed, mnemonic, UFVK, zecd `keys.toml`, wallet DB, wallet RPC cookie, Wallet A/B data directory or payout signer may be copied to the VPS, image, Compose secret or Git.
+
+Run the read-only static gate from a clean `main` checkout:
+
+```bash
+corepack pnpm preflight -- --static
+```
+
+Run the full gate only after secrets and backup paths are staged locally. It validates existence, modes and schemas without printing values:
+
+```bash
+DOMAIN=swap.example.org \
+ROUTE_DESTINATION_RECIPIENT=0x... \
+DB_PASSWORD_FILE=/secure/db_password \
+VERIFIER_TOKEN_FILE=/secure/verifier_token \
+ZECATHON_ENCRYPTION_KEY_FILE=/secure/encryption-keyring.json \
+ZECATHON_RELAY_ENCRYPTION_KEY_FILE=/secure/relay-encryption-keyring.json \
+ZECATHON_RELAY_COORDINATOR_PRIVATE_KEY_FILE=/secure/relay-coordinator.pk8.pem \
+ZECATHON_RELAY_VERIFIER_PUBLIC_KEY_FILE=/secure/relay-verifier.spki.pem \
+BACKUP_DIRECTORY=/secure/backups \
+corepack pnpm preflight
+```
+
 ## Backup
 
 Create backups outside the repository and encrypt them before off-host storage:
@@ -66,6 +103,26 @@ docker compose exec -T postgres psql -U zecathon -d zecathon_restore -c 'SELECT 
 ```
 
 Do not replace the live database until request counts, order counts, allocation uniqueness, receipts, authorization records, and audit history have been reconciled.
+
+The restore environment must receive a copy of every referenced encryption-key version. Test both successful decryption and failure with an intentionally absent old version. Restore drills must also confirm pending relay jobs, leases, replay fingerprints, authorization state and `UNRESOLVED` orders. Never test a restore by replacing the only live volume.
+
+## Health and monitoring
+
+- Alert on public `/health/ready` failure, PostgreSQL readiness, restart loops, disk/volume pressure, TLS renewal, backup age and restore-drill age.
+- Alert on relay jobs that are `PENDING`/`DISPATCHED` past expiry, repeated lease attempts, `UNRESOLVED` outcomes, evidence replay rejection and source reorg reconciliation.
+- Logs may contain request IDs, order-state names and reason codes. They must not contain receivers, transaction correlations, UFVKs, RPC cookies, private receipts, raw relay payloads or decrypted database records.
+- Caddy is the only service with host ports. PostgreSQL, API upstream and verifier networks stay private. The verifier exposes no wallet-RPC pass-through route.
+
+## Staged public-launch runbook
+
+1. **Build candidate:** clean `main`, pinned toolchain, full tests/typecheck/build/privacy/security gates, SBOM/image inspection, and static preflight.
+2. **Restore rehearsal:** encrypted backup plus isolated restore; reconcile schema versions, counts, unique allocations/replays, receipts, audit history and relay queue.
+3. **Private staging:** start PostgreSQL/API/Caddy with a non-public hostname or access control. Run migration, health checks, Docker smoke and restart/recovery. No wallet material is present.
+4. **Verifier staging:** provision separate Ed25519 identities and mutually authenticated tunnel. Use TEST-ONLY deterministic evidence first. Do not import a UFVK until a separate ceremony is approved.
+5. **Authentication gate:** deploy reviewed durable account identity, session rotation/revocation and phishing-resistant recovery. Repeat ownership and CSRF tests. This is currently blocked.
+6. **Read-only canary:** expose informational pages and request creation only after monitoring/backup alerts are green. Operator mutation remains CLI-only.
+7. **First linked testnet order:** follow [the separate approval runbook](first-linked-test-readiness.md). Each wallet start, address allocation, source transfer and Base payout is a separate approval. Stop on uncertainty.
+8. **Promotion decision:** review receipts, logs, privacy scan, reorg behavior, backup evidence and unresolved queue. Mainnet remains out of scope.
 
 ## Updates and rollback
 

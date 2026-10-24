@@ -14,6 +14,7 @@ import { PUBLIC_ROUTE_TERMS } from './public-order-store.ts';
 import { verifyZcashTransaction, type ZcashVerificationRequest } from './zcash-verifier.ts';
 import type { ValidatedReceivingAddress } from './zcash-address-allocator.ts';
 import { isDeepStrictEqual } from 'node:util';
+import { relayFingerprint, type SignedRelayEvidence } from './private-verification-protocol.ts';
 
 type SourceVerifier = (request: ZcashVerificationRequest) => ReturnType<typeof verifyZcashTransaction>;
 type DestinationVerifier = (request: BaseVerificationRequest) => ReturnType<typeof verifyBaseSepoliaTransaction>;
@@ -74,8 +75,8 @@ export class PostgresSettlementStore {
   constructor(pool: Pool, encryption: DataEncryption) { this.pool = pool; this.encryption = encryption; }
 
   async health(): Promise<void> {
-    const result = await this.pool.query('SELECT 1 FROM schema_migrations WHERE version = $1', ['002_settlement_integration']);
-    if (result.rowCount !== 1) throw new Error('Settlement integration migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay']]);
+    if (result.rowCount !== 2) throw new Error('Settlement or private relay migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
@@ -210,6 +211,60 @@ export class PostgresSettlementStore {
       await client.query(`UPDATE settlement_evidence SET encrypted_evidence=$2,encryption_key_version=$3,independently_verified_at=$4 WHERE order_id=$1 AND chain='zcash-testnet'`, [orderId, this.encryption.encrypt(evidence, evidenceContext(orderId, 'zcash-testnet')), this.encryption.activeVersion, new Date(now)]);
       await this.updateOrder(client, locked, next, now); await this.syncRequestStatus(client, orderId, next.status, now);
       await this.audit(client, orderId, 'VERIFIER', undefined, 'SOURCE_CONFIRMATIONS_VERIFIED', { confirmations: evidence.confirmations });
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async applyRelaySourceEvidence(jobId: string, envelope: SignedRelayEvidence, now = Date.now()): Promise<void> {
+    if (envelope.payload.outcome !== 'VERIFIED' || !envelope.payload.evidence) throw new Error('Only verified relay evidence can be applied');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const jobResult = await client.query<{ order_id: string; phase: 'SOURCE_DETECTION' | 'SOURCE_CONFIRMATION'; state: string; manifest_fingerprint: Buffer; request_fingerprint: Buffer }>('SELECT order_id,phase,state,manifest_fingerprint,request_fingerprint FROM private_verification_jobs WHERE job_id=$1 FOR UPDATE', [jobId]);
+      const job = jobResult.rows[0]; if (!job || job.state !== 'RECEIVED') throw new Error('Relay evidence is not ready to apply');
+      if (envelope.payload.jobId !== jobId || envelope.payload.orderId !== job.order_id || envelope.payload.phase !== job.phase) throw new Error('Relay job identity mismatch');
+      const row = await this.lockOrder(client, job.order_id); const order = this.privateOrder(row); const evidence = envelope.payload.evidence;
+      if (!job.manifest_fingerprint.equals(Buffer.from(relayFingerprint(row.immutable_manifest), 'hex')) || envelope.payload.manifestFingerprint !== job.manifest_fingerprint.toString('hex')) throw new Error('Relay manifest binding mismatch');
+      const request: ZcashVerificationRequest = {
+        orderId: order.id, transactionId: evidence.transactionId, receiver: order.sourceReceiver, amountZatoshis: order.sourceAmountZat,
+        expectedDiversifierIndex: order.sourceDiversifierIndex, minimumBlockHeight: order.sourceNotBeforeHeight,
+        minimumBlockTime: Math.floor(Date.parse(order.createdAt) / 1000), requiredPool: 'ironwood',
+        minimumConfirmations: job.phase === 'SOURCE_DETECTION' ? 1 : order.sourceMinimumConfirmations,
+      };
+      if (!job.request_fingerprint.equals(Buffer.from(relayFingerprint(request), 'hex')) || envelope.payload.requestFingerprint !== job.request_fingerprint.toString('hex')) throw new Error('Relay request binding mismatch');
+      const checked = verifyZcashShieldedReceipt(order, evidence); if (checked.outcome !== 'verified') throw new Error(`Source ${checked.outcome}: ${checked.reason}`);
+      let next: PaymentOrder;
+      if (job.phase === 'SOURCE_DETECTION') {
+        next = attachSourceEvidence(order, sourceLink(evidence), now);
+        const reference = fingerprint(`${evidence.transactionId}:${evidence.outputIndex}`);
+        await client.query(`INSERT INTO replay_references(chain,reference_fingerprint,order_id,reference_kind,reserved_at) VALUES('zcash-testnet',$1,$2,'SOURCE_OUTPUT',$3)`, [reference, order.id, new Date(now)]);
+        await client.query(`INSERT INTO settlement_evidence(evidence_id,order_id,chain,reference_fingerprint,encrypted_evidence,encryption_key_version,independently_verified_at) VALUES($1,$2,'zcash-testnet',$3,$4,$5,$6)`, [randomUUID(), order.id, reference, this.encryption.encrypt(evidence, evidenceContext(order.id, 'zcash-testnet')), this.encryption.activeVersion, new Date(now)]);
+      } else {
+        next = confirmSourceEvidence(order, sourceLink(evidence));
+        const updated = await client.query(`UPDATE settlement_evidence SET encrypted_evidence=$2,encryption_key_version=$3,independently_verified_at=$4 WHERE order_id=$1 AND chain='zcash-testnet'`, [order.id, this.encryption.encrypt(evidence, evidenceContext(order.id, 'zcash-testnet')), this.encryption.activeVersion, new Date(now)]);
+        if (updated.rowCount !== 1) throw new Error('Detected source evidence is missing');
+      }
+      await this.updateOrder(client, row, next, now); await this.syncRequestStatus(client, order.id, next.status, now);
+      const applied = await client.query(`UPDATE private_verification_jobs SET state='APPLIED',applied_at=$2,updated_at=$2 WHERE job_id=$1 AND state='RECEIVED'`, [jobId, new Date(now)]);
+      if (applied.rowCount !== 1) throw new Error('Relay evidence was already applied');
+      await this.audit(client, order.id, 'VERIFIER', envelope.payload.verifierId, job.phase === 'SOURCE_DETECTION' ? 'RELAY_SOURCE_EVIDENCE_APPLIED' : 'RELAY_SOURCE_CONFIRMATIONS_APPLIED', { jobId, confirmations: evidence.confirmations });
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async applyRelayUnresolved(jobId: string, envelope: SignedRelayEvidence, now = Date.now()): Promise<void> {
+    if (envelope.payload.outcome !== 'UNRESOLVED' || !envelope.payload.reasonCode || envelope.payload.evidence) throw new Error('Only unresolved relay evidence can be applied here');
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const jobResult = await client.query<{ order_id: string; state: string; verifier_id: string }>('SELECT order_id,state,verifier_id FROM private_verification_jobs WHERE job_id=$1 FOR UPDATE', [jobId]);
+      const job = jobResult.rows[0]; if (!job || job.state !== 'UNRESOLVED') throw new Error('Relay job is not unresolved');
+      if (envelope.payload.jobId !== jobId || envelope.payload.orderId !== job.order_id || envelope.payload.verifierId !== job.verifier_id) throw new Error('Relay unresolved identity mismatch');
+      const row = await this.lockOrder(client, job.order_id); const next = markUnresolved(this.privateOrder(row), `private-verifier:${envelope.payload.reasonCode.toLowerCase()}`);
+      await this.updateOrder(client, row, next, now); await this.syncRequestStatus(client, row.order_id, next.status, now);
+      const applied = await client.query(`UPDATE private_verification_jobs SET state='APPLIED',applied_at=$2,updated_at=$2 WHERE job_id=$1 AND state='UNRESOLVED'`, [jobId, new Date(now)]);
+      if (applied.rowCount !== 1) throw new Error('Relay unresolved result was already applied');
+      await this.audit(client, row.order_id, 'VERIFIER', job.verifier_id, 'RELAY_UNRESOLVED_APPLIED', { jobId, reasonCode: envelope.payload.reasonCode });
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }

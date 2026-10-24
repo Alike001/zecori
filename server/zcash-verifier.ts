@@ -9,7 +9,7 @@ export const ZECD_WALLET_B_RPC = 'http://127.0.0.1:18393/';
 export const ZECD_WALLET_B_DATA = join(homedir(), '.local', 'share', 'zecd-wallet-b-testnet');
 
 type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
-type WalletInfo = { scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; unlocked_until?: number };
+type WalletInfo = { scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; private_keys_enabled?: boolean; unlocked_until?: number };
 type AddressInfo = { address?: string; ismine?: boolean; isvalid_orchard?: boolean; receiver_types?: string[]; receivers_consistent?: boolean; diversifier_index?: number | string };
 type WalletTransaction = { txid?: string; confirmations?: number; blockhash?: string; blockheight?: number; blocktime?: number; details?: HistoryEntry[] };
 type HistoryEntry = { txid?: string; status?: string; confirmations?: number; pool?: string; category?: string; amountZat?: number | string; address?: string; outgoing?: boolean; change?: boolean; blockhash?: string; blockheight?: number; diversifier_index?: number | string; outindex?: number };
@@ -61,7 +61,9 @@ export async function verifyZcashTransaction(
   if (chain.initialblockdownload !== false || !Number.isInteger(chain.blocks) || chain.blocks !== chain.headers) throw new Error('zecd chain is not fully synchronized');
   if (wallet.scanning !== false || wallet.import_error) throw new Error('zecd wallet scan or history enhancement is incomplete');
   if (typeof wallet.enhanced_through !== 'number' || wallet.enhanced_through < (chain.blocks ?? 0)) throw new Error('zecd wallet history is not complete through the chain tip');
-  if (typeof wallet.unlocked_until !== 'number' || wallet.unlocked_until > Math.floor(Date.now() / 1_000)) throw new Error('zecd wallet must be encrypted and remain locked during verification');
+  const watchOnly = wallet.private_keys_enabled === false && wallet.unlocked_until === undefined;
+  const lockedSpendingWallet = wallet.private_keys_enabled === true && wallet.unlocked_until === 0;
+  if (!watchOnly && !lockedSpendingWallet) throw new Error('zecd verifier must be watch-only or an encrypted spending wallet that remains locked');
   if (address.ismine !== true || address.isvalid_orchard !== true || !address.receiver_types?.includes('orchard') || address.receivers_consistent === false) {
     throw new Error('Receiver is not an owned consistent Orchard-capable address');
   }

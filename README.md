@@ -36,6 +36,7 @@ corepack pnpm typecheck
 corepack pnpm build
 corepack pnpm privacy:scan
 corepack pnpm security:gate
+corepack pnpm preflight -- --static
 ```
 
 Vite no longer contains backend middleware. For split development, run the API and Vite in separate terminals after configuring a disposable PostgreSQL database:
@@ -75,7 +76,7 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
 
-The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. The verifier has no host port and requires a separate service token. Zcash verification deployment remains blocked pending an approved design that does not copy existing wallet secrets onto the server.
+The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. The verifier has no host port and requires a separate service token. Zcash source verification uses a durable PostgreSQL relay with separate Ed25519 coordinator/verifier identities, short-lived signed messages, encrypted evidence and lease recovery; wallet RPC remains loopback-only on the operator host. Production use still requires approved PostgreSQL mTLS identities and a separately approved watch-only UFVK ceremony.
 
 ## Operator-only settlement commands
 
