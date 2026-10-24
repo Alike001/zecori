@@ -27,9 +27,23 @@ type Unspent = {
 };
 
 export function exactZecToZatoshis(value: number | string | undefined, label: string): bigint {
-  const decimal = typeof value === 'number'
-    ? (Number.isSafeInteger(value) && value >= 0 ? String(value) : '')
-    : value;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < 0) throw new Error(`${label} is not an exact nonnegative ZEC amount with at most 8 decimals`);
+    // Use the number's canonical round-trippable decimal, including exponent notation, rather
+    // than multiplying in binary floating point. This accepts ordinary JSON.parse output while
+    // still rejecting sub-zatoshi values and arithmetic noise such as 0.1 + 0.2.
+    const match = value.toString().match(/^(\d+)(?:\.(\d+))?(?:e([+-]?\d+))?$/i);
+    if (match) {
+      const digits = `${match[1]}${match[2] ?? ''}`;
+      const power = Number(match[3] ?? 0) - (match[2]?.length ?? 0) + 8;
+      const exact = power >= 0
+        ? BigInt(digits) * (10n ** BigInt(power))
+        : digits.endsWith('0'.repeat(-power)) ? BigInt(digits.slice(0, power) || '0') : undefined;
+      if (exact !== undefined && exact <= BigInt(Number.MAX_SAFE_INTEGER)) return exact;
+    }
+    throw new Error(`${label} is not an exact nonnegative ZEC amount with at most 8 decimals`);
+  }
+  const decimal = value;
   const match = decimal?.match(/^(0|[1-9]\d*)(?:\.(\d{1,8}))?$/);
   if (!match) throw new Error(`${label} is not an exact nonnegative ZEC amount with at most 8 decimals`);
   return BigInt(match[1]) * 100_000_000n + BigInt((match[2] ?? '').padEnd(8, '0'));
@@ -89,7 +103,10 @@ export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: str
 
   const pools = new Map<string, bigint>();
   for (const [index, note] of unspent.entries()) {
-    if (!note.pool || !['transparent', 'sapling', 'orchard', 'ironwood'].includes(note.pool)) throw new Error(`Wallet A unspent item ${index} has an unknown pool`);
+    if (!note.pool) {
+      throw new Error(`Wallet A Ironwood spendability cannot be proven: listunspent item ${index} has no pool; aggregate getbalance and z_listtransactions history cannot identify current unspent Ironwood notes because internal change is excluded`);
+    }
+    if (!['transparent', 'sapling', 'orchard', 'ironwood'].includes(note.pool)) throw new Error(`Wallet A unspent item ${index} has an unknown pool`);
     if (!Number.isSafeInteger(note.confirmations) || (note.confirmations as number) < SOURCE_MINIMUM_CONFIRMATIONS) throw new Error(`Wallet A ${note.pool} note violates the minimum confirmation policy`);
     if (note.spendable !== true || note.solvable !== true || note.safe !== true) throw new Error(`Wallet A ${note.pool} note is not safely spendable`);
     pools.set(note.pool, (pools.get(note.pool) ?? 0n) + exactZecToZatoshis(note.amount, `Wallet A ${note.pool} amount`));

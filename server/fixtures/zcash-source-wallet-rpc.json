@@ -1,0 +1,22 @@
+{
+  "pinnedLivePoolAware": {
+    "responses": {
+      "getbalance": 0.98465000,
+      "listunspent": [
+        { "txid": "1111111111111111111111111111111111111111111111111111111111111111", "vout": 0, "address": "utest1fixtureexternalreceiver", "amount": 0.40000000, "confirmations": 40, "spendable": true, "solvable": true, "safe": true, "pool": "ironwood" },
+        { "txid": "2222222222222222222222222222222222222222222222222222222222222222", "vout": 0, "address": "", "amount": 0.58465000, "confirmations": 20, "spendable": true, "solvable": true, "safe": true, "pool": "ironwood" }
+      ]
+    }
+  },
+  "documentedPoolBlind": {
+    "responses": {
+      "getbalance": 0.01010000,
+      "listunspent": [
+        { "txid": "3333333333333333333333333333333333333333333333333333333333333333", "vout": 0, "address": "", "amount": 0.01010000, "confirmations": 12, "spendable": true, "solvable": true, "safe": true }
+      ],
+      "z_listtransactions": [
+        { "txid": "4444444444444444444444444444444444444444444444444444444444444444", "status": "mined", "confirmations": 12, "pool": "ironwood", "category": "receive", "amount": 0.01010000, "amountZat": 1010000, "address": "utest1fixtureexternalreceiver", "outgoing": false, "change": false, "outindex": 0 }
+      ]
+    }
+  }
+}

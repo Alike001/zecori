@@ -18,9 +18,9 @@ Wallet A readiness now requires all of the following:
 - Configured wallet name `default`, `private_keys_enabled: true`, and account `0` under zecd's one-account wallet model.
 - No scan or import error, enhanced history through the current tip, and `unlocked_until: 0`.
 - `getbalance "*" 10` aggregate value at or above `1,010,000` zatoshis.
-- `listunspent 10 9999999 [] false` with at least `1,010,000` zatoshis summed from entries whose pool is exactly `ironwood` and whose `spendable`, `solvable`, and `safe` flags are all true.
+- `listunspent 10 9999999 [] false` with at least `1,010,000` zatoshis summed from entries whose runtime pool label is exactly `ironwood` and whose `spendable`, `solvable`, and `safe` flags are all true. The pinned source and release binary expose the pool extension, but the published field list omits it, so the application treats it as mandatory evidence rather than assuming it: any missing label fails closed.
 
-All decimal ZEC JSON numbers are preserved as text before JSON decoding can round them. Conversion accepts only nonnegative plain decimal values with at most eight fractional digits and uses `bigint` zatoshi arithmetic. Transparent, Sapling, and Orchard entries are exposed only as diagnostic pool totals and cannot satisfy the FullPrivacy gate. If pool labels, safety flags, confirmation counts, exact decimal values, or aggregate consistency cannot be proven, the check fails closed.
+The application RPC client preserves decimal ZEC JSON-number tokens as text before decoding can round them. Conversion also accepts an ordinary JavaScript number when its canonical decimal representation resolves exactly to a safe whole-zatoshi integer; sub-zatoshi values and arithmetic noise fail closed. All totals use `bigint` zatoshi arithmetic. Transparent, Sapling, and Orchard entries are exposed only as diagnostic pool totals and cannot satisfy the FullPrivacy gate. If pool labels, safety flags, confirmation counts, exact decimal values, or aggregate consistency cannot be proven, the check fails closed. `z_listtransactions` is not a fallback because it excludes internal change and therefore cannot prove the current unspent pool composition.
 
 ## Base Sepolia endpoint
 

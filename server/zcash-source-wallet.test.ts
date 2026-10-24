@@ -1,7 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import { checkSourceWalletA, exactZecToZatoshis } from './zcash-source-wallet.ts';
 import type { RpcCall } from './rpc-client.ts';
+
+type Fixture = { responses: Record<string, unknown> };
+
+async function fixture(name: string): Promise<Fixture> {
+  const fixtures = JSON.parse(await readFile(new URL('./fixtures/zcash-source-wallet-rpc.json', import.meta.url), 'utf8')) as Record<string, Fixture>;
+  return fixtures[name];
+}
 
 function note(pool: string, amount: string, confirmations = 10) {
   return { pool, amount, confirmations, spendable: true, solvable: true, safe: true };
@@ -20,10 +28,10 @@ function walletRpc(overrides: Record<string, unknown> = {}): { call: RpcCall; re
 }
 
 test('uses only pinned zecd balance RPCs and proves exact Ironwood funding', async () => {
-  const rpc = walletRpc(); const result = await checkSourceWalletA(rpc.call);
-  assert.equal(result.aggregateConfirmedZatoshis, '1010000');
-  assert.equal(result.ironwoodUsableZatoshis, '1010000');
-  assert.equal(result.confirmedZatoshis, '1010000');
+  const rpc = walletRpc((await fixture('pinnedLivePoolAware')).responses); const result = await checkSourceWalletA(rpc.call);
+  assert.equal(result.aggregateConfirmedZatoshis, '98465000');
+  assert.equal(result.ironwoodUsableZatoshis, '98465000');
+  assert.equal(result.confirmedZatoshis, '98465000');
   assert.equal(result.sufficientForPaymentAndFeeReserve, true);
   assert.equal(result.fullPrivacyCompatible, true);
   assert.deepEqual(rpc.requests.map(([method]) => method).sort(), ['getblockchaininfo', 'getwalletinfo', 'getbalance', 'listunspent'].sort());
@@ -61,6 +69,22 @@ test('fails closed for confirmations, unsafe notes, malformed decimals and incon
   await assert.rejects(checkSourceWalletA(walletRpc({ listunspent: [{ ...note('ironwood', '0.01010000'), safe: false }] }).call), /safely spendable/);
   await assert.rejects(checkSourceWalletA(walletRpc({ listunspent: [note('ironwood', '0.010100001')] }).call), /exact/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getbalance: '0.01000000' }).call), /exceeds/);
-  assert.throws(() => exactZecToZatoshis(0.0101, 'amount'), /exact/);
+  assert.equal(exactZecToZatoshis(0.0101, 'amount'), 1_010_000n);
+  assert.equal(exactZecToZatoshis(0.00000029, 'amount'), 29n);
+  assert.throws(() => exactZecToZatoshis(0.000000001, 'amount'), /exact/);
+  assert.throws(() => exactZecToZatoshis(0.1 + 0.2, 'amount'), /exact/);
   assert.equal(exactZecToZatoshis('0.01010000', 'amount'), 1_010_000n);
+});
+
+test('accepts the documented JSON numeric getbalance wire value', async () => {
+  const result = await checkSourceWalletA(walletRpc((await fixture('pinnedLivePoolAware')).responses).call);
+  assert.equal(result.aggregateConfirmedZatoshis, '98465000');
+  assert.equal(result.ironwoodUsableZatoshis, '98465000');
+  assert.equal(result.sufficientForPaymentAndFeeReserve, true);
+});
+
+test('fails closed when the documented listunspent shape has no pool', async () => {
+  const rpc = walletRpc((await fixture('documentedPoolBlind')).responses);
+  await assert.rejects(checkSourceWalletA(rpc.call), /Ironwood spendability cannot be proven: listunspent item 0 has no pool.*internal change is excluded/);
+  assert.equal(rpc.requests.some(([method]) => method === 'z_listtransactions'), false);
 });
