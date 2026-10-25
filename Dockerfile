@@ -17,7 +17,11 @@ COPY --from=build --chown=zecathon:zecathon /app/src ./src
 COPY --from=build --chown=zecathon:zecathon /app/scripts ./scripts
 COPY --from=build --chown=zecathon:zecathon /app/package.json ./package.json
 COPY --chown=zecathon:zecathon docker/entrypoint.sh /usr/local/bin/zecathon-entrypoint
-RUN chmod 0555 /usr/local/bin/zecathon-entrypoint
+COPY --chown=zecathon:zecathon docker/runtime-command.sh /usr/local/bin/zecathon-runtime-command
+RUN find dist server src scripts -type d -exec chmod 0555 {} + \
+ && find dist server src scripts -type f -exec chmod 0444 {} + \
+ && chmod 0444 package.json \
+ && chmod 0555 /usr/local/bin/zecathon-entrypoint /usr/local/bin/zecathon-runtime-command
 EXPOSE 8787
 ENTRYPOINT ["zecathon-entrypoint"]
 CMD ["node", "--experimental-strip-types", "server/app-server.ts"]

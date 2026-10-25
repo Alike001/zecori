@@ -1,0 +1,10 @@
+ARG BASE_IMAGE=zecathon-staging-durable-api@sha256:e84b002d05e935a8565d85108ddeb0ef5652a8ad58eed91b70271547aa8bb937
+FROM ${BASE_IMAGE}
+LABEL zecathon.canary.base="sha256:e84b002d05e935a8565d85108ddeb0ef5652a8ad58eed91b70271547aa8bb937" \
+      zecathon.canary.scope="runtime-wrapper,keyring-canary,initializer,backup-source-verifier" \
+      zecathon.canary.revision="permissions-v2"
+
+COPY --chown=10001:10001 --chmod=0444 server/keyring-canary.ts /app/server/keyring-canary.ts
+COPY --chown=10001:10001 --chmod=0444 scripts/staging-keyring-check.ts /app/scripts/staging-keyring-check.ts
+COPY --chown=10001:10001 --chmod=0444 scripts/verify-backup-source.ts /app/scripts/verify-backup-source.ts
+COPY --chmod=0555 docker/runtime-command.sh /usr/local/bin/zecathon-runtime-command

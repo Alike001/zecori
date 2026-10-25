@@ -6,7 +6,7 @@ No wallet was started or unlocked. No address was derived, no transaction was si
 
 ## Durable staging
 
-`compose.staging.yaml` is an isolated `zecathon-staging` project. It uses PostgreSQL `17.7`, the explicitly named `zecathon_staging_postgres_data` volume, the dedicated `zecathon_staging_live` database/user, an internal data network, and no host database port. The API is published only at `127.0.0.1:8787`. Operator and private verifier-relay profiles inherit the same database configuration; neither profile starts by default.
+`compose.staging.yaml` defaults to the preserved `zecathon-staging` project and `zecathon_staging_postgres_data` volume. Milestone 05B adds explicit environment-selected project and volume identities so a durable instance cannot silently reuse that TEST-ONLY database. See `staging-milestone-05b.md` before running any staging command.
 
 The interactive provisioner creates independent database, order AES-256-GCM, relay AES-256-GCM, operator HMAC, and coordinator/verifier Ed25519 keys outside the repository. It refuses a non-empty target, uses mode `0700`/`0600`, and never displays key values. Local Compose services run as the provisioning user's numeric UID/GID so mode-0600 bind-mounted secrets remain readable without making them world-readable.
 
@@ -61,7 +61,7 @@ Create and verify an encrypted backup before any funded order:
 
 ```bash
 scripts/staging-backup.sh /ABSOLUTE/PRIVATE/PATH/staging.env /ABSOLUTE/PRIVATE/BACKUP/DIRECTORY
-scripts/staging-restore-drill.sh /ABSOLUTE/PRIVATE/BACKUP/DIRECTORY/zecathon-staging-TIMESTAMP.tar.gz.gpg
+scripts/staging-restore-drill.sh /ABSOLUTE/PRIVATE/BACKUP/DIRECTORY/zecathon-staging-TIMESTAMP.tar.gz.gpg /ABSOLUTE/PRIVATE/PATH/staging.env
 ```
 
 Never run `docker compose down -v`. Inspect the exact staging container and volume before any cleanup; the restore drill intentionally retains its isolated artifacts.

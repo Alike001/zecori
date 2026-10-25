@@ -1,0 +1,3 @@
+services:
+  api:
+    image: ${CANARY_REPAIR_IMAGE:?Set the reviewed canary-repair image tag}

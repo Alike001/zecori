@@ -1,4 +1,4 @@
-name: zecathon-staging
+name: ${STAGING_COMPOSE_PROJECT:-zecathon-staging}
 
 services:
   postgres:
@@ -51,7 +51,7 @@ services:
       PORT: 8787
       PUBLIC_ORIGIN: http://localhost:8787
       WEBAUTHN_RP_ID: localhost
-      ROUTE_DESTINATION_RECIPIENT: ${ROUTE_DESTINATION_RECIPIENT:?Set a confirmed Base Sepolia test receiver in the staging env file}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}
       ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
     secrets: [db_password, encryption_keyring]
     ports:
@@ -83,6 +83,7 @@ services:
       <<: *database_environment
       NODE_ENV: staging
       ZECATHON_OPERATOR_ID: ${ZECATHON_OPERATOR_ID:?Set a staging operator ID}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}
       ZECATHON_OPERATOR_KEY: /run/secrets/operator_hmac
       ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
       ZECATHON_RELAY_ENCRYPTION_KEY_FILE: /run/secrets/relay_encryption_keyring
@@ -94,7 +95,7 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
-    networks: [staging_data]
+    networks: [staging_data, verifier_egress]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
 
@@ -133,7 +134,7 @@ networks:
 
 volumes:
   staging_postgres_data:
-    name: zecathon_staging_postgres_data
+    name: ${STAGING_POSTGRES_VOLUME:-zecathon_staging_postgres_data}
 
 secrets:
   db_password:
