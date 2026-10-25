@@ -3,8 +3,17 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { PublicOrderRequestStore } from './public-order-store.ts';
 import { PUBLIC_ROUTE_TERMS } from './public-order-store.ts';
 import { clearSessionCookies, sessionCookies, type AuthenticatedUser, type UserIdentityService } from './user-auth.ts';
+import type { AgentGateway } from './agent-gateway.ts';
+import { validateWalletReadinessIntent } from './wallet-intent.ts';
+import type { DestinationWalletControlService } from './destination-wallet-control-store.ts';
 
-type ApiOptions = { allowedOrigin: string; destinationRecipient: string; secureCookies: boolean; auth: UserIdentityService };
+type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; walletControl: DestinationWalletControlService };
+
+const ORDER_CREATION = Object.freeze({
+  enabled: true as const,
+  binding: 'encrypted-owner-scoped-v2' as const,
+  walletControlVerification: 'required-eip712-or-erc1271' as const,
+});
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   response.statusCode = status;
@@ -81,15 +90,46 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
         response.setHeader('set-cookie', clearSessionCookies(options.secureCookies)); writeJson(response, 200, { loggedOut: true }); return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/v1/capabilities') {
-        writeJson(response, 200, { apiVersion: 'v1', execution: 'operator-approved-testnet-only', route: PUBLIC_ROUTE_TERMS, destinationRecipient: options.destinationRecipient }); return true;
+        writeJson(response, 200, {
+          apiVersion: 'v1', execution: 'operator-approved-testnet-only', route: PUBLIC_ROUTE_TERMS,
+          routeId: 'zcash-testnet-to-base-sepolia-fixed', classification: 'fixed-test-terms',
+          orderCreation: ORDER_CREATION,
+          wallets: {
+            zcash: { network: 'zcash-testnet', pool: 'ironwood', connectedMode: 'read-only-capability-check', externalMode: true },
+            base: { network: 'base-sepolia', chainId: 84532, contract: PUBLIC_ROUTE_TERMS.destination.contract, connectedMode: 'user-initiated-eip712', manualRecipient: true, addressIntentConfirmation: true, walletControlVerified: true, supportedProofs: ['EIP-712 EOA','ERC-1271 deployed contract'] },
+          },
+          agent: options.agent.status,
+        }); return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/agent/messages') {
+        if (session) requireCsrf(options, session, request);
+        const body = await readJson(request, 8_192);
+        const allowed = new Set(['message', 'locale']);
+        if (Object.keys(body).some(key => !allowed.has(key))) throw new Error('Agent request contains unsupported fields.');
+        if (typeof body.message !== 'string') throw new Error('Agent message is required.');
+        const locale = body.locale ?? 'en';
+        if (!['en', 'fr', 'ar'].includes(String(locale))) throw Object.assign(new Error('The requested language is not supported.'), { code: 'UNSUPPORTED_LANGUAGE' });
+        const reply = await options.agent.respond(body.message, { store, ...(session ? { userId: session.userId } : {}) }, locale as 'en' | 'fr' | 'ar');
+        writeJson(response, 200, { reply }); return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/v1/order-requests') {
         const authenticated = requireSession(session); writeJson(response, 200, { requests: await store.list(authenticated.userId) }); return true;
       }
       if (request.method === 'POST' && url.pathname === '/api/v1/order-requests') {
         const authenticated = requireCsrf(options, session, request); const body = await readJson(request, 4_096);
-        if (Object.keys(body).length !== 0) throw new Error('This route accepts only an empty JSON object');
-        writeJson(response, 202, { request: await store.create(authenticated.userId, options.destinationRecipient) }); return true;
+        const intent = validateWalletReadinessIntent(body);
+        writeJson(response, 202, { request: await store.create(authenticated.userId, intent) }); return true;
+      }
+      const challenge = url.pathname.match(/^\/api\/v1\/order-requests\/([0-9a-f-]{36})\/destination-challenges$/i);
+      if (request.method === 'POST' && challenge) {
+        const authenticated = requireCsrf(options, session, request); await readJson(request, 1_024);
+        writeJson(response, 201, { challenge: await options.walletControl.issue(authenticated, challenge[1], options.allowedOrigin) }); return true;
+      }
+      const proof = url.pathname.match(/^\/api\/v1\/destination-challenges\/([0-9a-f-]{36})\/verify$/i);
+      if (request.method === 'POST' && proof) {
+        const authenticated = requireCsrf(options, session, request); const body = await readJson(request, 20_000);
+        const allowed = new Set(['signature']); if (Object.keys(body).some(key => !allowed.has(key))) throw new Error('Wallet proof contains unsupported fields.');
+        writeJson(response, 200, { verification: await options.walletControl.verify(authenticated, proof[1], body.signature, options.allowedOrigin) }); return true;
       }
       const match = url.pathname.match(/^\/api\/v1\/order-requests\/([0-9a-f-]{36})$/i);
       if (request.method === 'GET' && match) {

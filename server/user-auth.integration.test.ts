@@ -6,6 +6,8 @@ import type { AuthenticationResponseJSON, RegistrationResponseJSON } from '@simp
 import { createPostgresPool, migrateDatabase } from './postgres.ts';
 import { PostgresPasskeyAuth } from './user-auth.ts';
 import { PostgresPublicOrderRequestStore } from './public-order-store.ts';
+import { DataEncryption } from './data-encryption.ts';
+import { fixedWalletReadinessIntent } from './wallet-intent.ts';
 
 const databaseUrl = process.env.POSTGRES_TEST_URL;
 function request(sessionToken: string, csrfToken: string): IncomingMessage {
@@ -45,7 +47,7 @@ test('TEST-ONLY passkey registration, second credential, cross-session login, re
   const rotated = await auth.session(request(added.session.sessionToken, added.session.csrfToken));
   assert.equal(rotated?.passkeyCount, 2);
 
-  const orders = new PostgresPublicOrderRequestStore(pool); const created = await orders.create(registered.userId, `0x${randomBytes(20).toString('hex')}`);
+  const orders = new PostgresPublicOrderRequestStore(pool, new DataEncryption({ activeVersion: 1, keys: new Map([[1, randomBytes(32)]]) })); const created = await orders.create(registered.userId, fixedWalletReadinessIntent(`0x${randomBytes(20).toString('hex')}`));
   const login = await auth.beginAuthentication() as { challengeId: string };
   const authenticated = await auth.finishAuthentication({ challengeId: login.challengeId, response: authenticationResponse(secondId) });
   const newSession = await auth.session(request(authenticated.session.sessionToken, authenticated.session.csrfToken));

@@ -56,7 +56,7 @@ Set private environment variables in an operator-only shell without putting secr
 4. **Create the accepted, inactive linked order identity.** The order-scoped allocation design requires the public request and accepted order UUID to exist before any Wallet B derivation is authorized. A public browser creates the request; the operator then runs:
 
    ```bash
-   corepack pnpm operator -- accept-request --request '<REQUEST_UUID>' --recipient '<EXACT_BASE_RECIPIENT>' --terms '0.01 TAZ -> 1 test USDC' --operator '<OPERATOR_ID>' --confirm 'EXECUTE ACCEPT-REQUEST'
+   corepack pnpm operator -- accept-request --request '<REQUEST_UUID>' --terms '0.01 TAZ -> 1 test USDC' --operator '<OPERATOR_ID>' --confirm 'EXECUTE ACCEPT-REQUEST'
    ```
 
    This accepts and signs immutable terms but publishes no payment instructions.

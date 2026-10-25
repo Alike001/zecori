@@ -12,7 +12,7 @@ The application does not offer mainnet execution, automatic payouts, trustless s
 
 ## Current implementation
 
-The public application can inspect exact route terms, create an owner-scoped request, follow the durable operator/verification timeline, display encrypted-at-rest payment instructions only after a validated allocation, and retrieve a redacted or owner-private verified receipt.
+The public application can inspect exact route terms and manually explore recipient addresses without login. Passkeys protect private history, tracking, and receipts. A financial request becomes operator-eligible only after an explicit EIP-712 or ERC-1271 destination-control proof; unverified destinations remain clearly labeled and blocked. Existing authenticated orders show genuine backend lifecycle state and reveal encrypted-at-rest payment instructions only after validated durable allocation.
 
 The standalone Node server provides:
 
@@ -34,6 +34,7 @@ corepack pnpm install --frozen-lockfile
 corepack pnpm test
 corepack pnpm typecheck
 corepack pnpm build
+corepack pnpm test:browser
 corepack pnpm privacy:scan
 corepack pnpm security:gate
 corepack pnpm preflight -- --static
@@ -45,8 +46,8 @@ Vite no longer contains backend middleware. For split development, run the API a
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm db:migrate
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
 ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
+BASE_SEPOLIA_RPC_URL='https://YOUR_TRUSTED_BASE_SEPOLIA_RPC' \
 PUBLIC_ORIGIN='http://127.0.0.1:5173' \
-ROUTE_DESTINATION_RECIPIENT='0xYOUR_CONFIRMED_BASE_SEPOLIA_RECEIVER' \
 corepack pnpm dev:api
 ```
 
@@ -54,7 +55,7 @@ corepack pnpm dev:api
 corepack pnpm dev
 ```
 
-Use the complete operator-confirmed public Base Sepolia recipient. The server rejects incomplete and zero addresses.
+Each authenticated request supplies an explicitly confirmed Base Sepolia recipient. The server validates its EIP-55 form, encrypts it, and binds it to the owner and immutable manifest; there is no configured fallback recipient. Operator acceptance additionally requires the single-use EIP-712/ ERC-1271 destination-control ceremony documented in [Milestone 06C](docs/milestone-06c-destination-wallet-control.md).
 
 ## Local production mode
 
@@ -64,8 +65,8 @@ DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm 
 NODE_ENV=development \
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
 ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
+BASE_SEPOLIA_RPC_URL='https://YOUR_TRUSTED_BASE_SEPOLIA_RPC' \
 PUBLIC_ORIGIN='http://127.0.0.1:8787' \
-ROUTE_DESTINATION_RECIPIENT='0xYOUR_CONFIRMED_BASE_SEPOLIA_RECEIVER' \
 corepack pnpm start
 node scripts/smoke-production.mjs http://127.0.0.1:8787
 ```
@@ -95,7 +96,7 @@ corepack pnpm operator -- orders
 The exact lifecycle sequence is:
 
 ```bash
-corepack pnpm operator -- accept-request --request REQUEST_UUID --recipient EXACT_BASE_RECIPIENT --terms '0.01 TAZ -> 1 test USDC' --operator OPERATOR_ID --confirm 'EXECUTE ACCEPT-REQUEST'
+corepack pnpm operator -- accept-request --request REQUEST_UUID --terms '0.01 TAZ -> 1 test USDC' --operator OPERATOR_ID --confirm 'EXECUTE ACCEPT-REQUEST'
 corepack pnpm operator -- authorize-allocation --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE AUTHORIZE-ALLOCATION'
 corepack pnpm operator -- reserve-validated-allocation --order ORDER_UUID --authorization AUTH_UUID --receiver EXISTING_RECEIVER --operator OPERATOR_ID --confirm 'EXECUTE RESERVE-VALIDATED-ALLOCATION'
 corepack pnpm operator -- publish-instructions --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE PUBLISH-INSTRUCTIONS'
@@ -115,11 +116,15 @@ Every mutation requires its exact confirmation phrase in an interactive terminal
 
 ## Assistant and voice boundaries
 
-The current assistant uses a typed capability registry and deterministic intent router. No third-party generative model is enabled. It may explain privacy, route terms, custody, refunds, and owner-authorized request status. Injection attempts, secret requests, payout approval, signing, and unsupported transfers are refused.
+The assistant now runs through a provider-independent server gateway. Its only model-callable functions are the typed, allow-listed public and account-scoped tools in `server/agent-tools.ts`. Account tools resolve ownership again on the server and send only redacted status or shareable receipt data to the model. No tool can derive an address, create an order, approve a payout, sign, broadcast, or call operator controls.
 
-Voice is disabled. The adapter contract requires explicit microphone permission and a provider-specific privacy and retention disclosure before activation. Spoken words can never authorize a payment or payout.
+Without provider configuration, `/api/v1/capabilities` and every assistant response clearly report `limited` mode. Limited mode remains deterministic and does not present itself as generative AI. The gateway supports explicit OpenAI and Groq Responses adapters; the reviewed Groq model is `openai/gpt-oss-20b`. Credentials alone do not activate either provider: external calls require the exact separate `AI_EXTERNAL_REQUESTS_APPROVED` operator opt-in. See [AI agent operations](docs/ai-agent-operations.md) for dedicated-project key handling, budgets, provider-specific retention behavior, bounded request settings, and separately gated live validators.
 
-Only English is enabled because it is the only reviewed language in this milestone.
+Voice remains disabled in the product UI because no speech provider has been configured and tested. The voice state machine requires a user-initiated processing and retention disclosure before microphone permission, exposes recording/processing/transcript-confirmation states, blocks wallet/session material from speech output, and marks every transcript as incapable of payment authorization. Text input remains available.
+
+English, French, and Arabic message catalogs and locale negotiation are available, including right-to-left layout for Arabic. English is reviewed; French and Arabic are explicitly marked machine-generated and unvalidated. New locales fail closed to English at the UI boundary and are rejected by the agent API unless registered.
+
+Milestone 06A's public swap journey and the exact destination-binding blocker are documented in [wallet readiness](docs/milestone-06a-wallet-readiness.md).
 
 ## Non-negotiable safety rules
 

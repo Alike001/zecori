@@ -14,7 +14,7 @@ export type PublicOrderRequest = {
   status: 'AWAITING_OPERATOR' | 'ACCEPTED' | 'PAYMENT_READY' | 'SOURCE_DETECTED' | 'SOURCE_CONFIRMED' | 'PAYOUT_AWAITING_APPROVAL' | 'PAYOUT_SUBMITTED' | 'COMPLETED' | 'FAILED' | 'REFUND_PENDING' | 'REFUNDED' | 'UNRESOLVED' | 'EXPIRED' | 'CANCELLED';
   createdAt: string;
   expiresAt: string;
-  destinationRecipient: string;
+  destinationBinding: { status: 'confirmed' | 'bound' | 'expired' | 'revoked' | 'legacy-unverified'; consentConfirmedAt?: string; walletControlVerification: 'unverified' | 'verified-eoa' | 'verified-erc1271'; verifiedAt?: string };
   terms: PublicRouteTerms;
   linkedOrderId?: string;
   paymentInstructions?: { receiver: string; expiresAt: string };
@@ -22,11 +22,60 @@ export type PublicOrderRequest = {
   timeline?: Array<{ type: string; at: string; actor: string; details: Record<string, unknown> }>;
 };
 
+export type PrivateReceipt = {
+  receiptId: string;
+  kind: 'final';
+  orderId: string;
+  sourceChain: 'zcash-testnet';
+  destinationChain: 'base-sepolia';
+  sourceAsset: 'TAZ';
+  destinationAsset: 'USDC';
+  verifiedSourceAmount: string;
+  verifiedDestinationAmount: string;
+  actualKnownFees: Array<{ asset: string; amount: string }>;
+  sourceSettlementTimestamp: string;
+  destinationSettlementTimestamp: string;
+  destinationTransactionHash: string;
+  sourceTransactionId: string;
+  verificationStatus: 'independently-verified';
+  privacyClassification: string;
+  printableNotice: string;
+};
+
 export type PublicCapabilities = {
   apiVersion: 'v1';
   execution: 'operator-approved-testnet-only';
+  routeId: 'zcash-testnet-to-base-sepolia-fixed';
+  classification: 'fixed-test-terms';
   route: PublicRouteTerms;
-  destinationRecipient: string;
+  orderCreation: { enabled: true; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-or-erc1271' };
+  wallets: {
+    zcash: { network: 'zcash-testnet'; pool: 'ironwood'; connectedMode: 'read-only-capability-check'; externalMode: true };
+    base: { network: 'base-sepolia'; chainId: 84532; contract: string; connectedMode: 'user-initiated-eip712'; manualRecipient: true; addressIntentConfirmation: true; walletControlVerified: true; supportedProofs: string[] };
+  };
+  agent: { mode: 'model-backed' | 'limited'; provider?: string; model?: string; reason?: string; externalRequestsApproved: boolean; limits: { maxOutputTokens: number; maxProviderCalls: number }; dataHandling?: { responseStorageControl: 'request-disabled' | 'provider-default'; retentionNotice: string } };
+};
+
+export type AgentReply = {
+  text: string;
+  mode: 'model-backed' | 'limited';
+  provider?: string;
+  toolsUsed: string[];
+  providerCalls: number;
+  usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  refusal?: true;
+  failureCode?: 'input-policy' | 'provider-response' | 'tool-authorization' | 'tool-output-boundary' | 'model-output-rejected' | 'provider-call-limit';
+  publicRouteDiagnostic?: { failedRule: string; extractedFacts: { tazAmounts: string[]; usdcAmounts: string[]; exactFixedPricing: boolean; routeId?: string; routeIds: string[]; providerIds: string[]; destinationChainIds: string[]; mentionsBaseSepolia: boolean; statesNoLiveMarketQuote: boolean; statesNoSpendingAuthority: boolean; unsupportedNetworkClaims: string[] }; sanitizedModelResponse: string };
+  factCards?: AgentFactCard[];
+};
+
+export type AgentFactCard = {
+  kind: 'supported-route'; routeId: 'zcash-testnet-to-base-sepolia-fixed'; classification: 'fixed-test-terms';
+  source: { network: 'zcash-testnet'; asset: 'TAZ'; amount: '0.01'; amountZatoshis: '1000000'; pool: 'ironwood' };
+  destination: { network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; amount: '1'; amountAtomic: '1000000'; contract: string };
+  provider: { id: string; model: 'trusted-liquidity-provider' };
+  pricing: { description: string; sourceAtomicUnits: string; destinationAtomicUnits: string };
+  disclosures: { testOnly: true; liveMarketQuote: false; spendingAuthority: false; createsOrder: false; authorizesPayment: false };
 };
 
 let csrfToken: string | undefined;
@@ -84,13 +133,40 @@ export async function listOrderRequests(): Promise<PublicOrderRequest[]> {
   return (await parse<{ requests: PublicOrderRequest[] }>(await fetch('/api/v1/order-requests', { credentials: 'same-origin' }))).requests;
 }
 
-export async function createOrderRequest(): Promise<PublicOrderRequest> {
+export type WalletReadinessIntent = {
+  routeId: 'zcash-testnet-to-base-sepolia-fixed'; amountZatoshis: '1000000'; termsAccepted: true;
+  source: { mode: 'connected-read-only' | 'external'; network: 'zcash-testnet'; pool: 'ironwood' };
+  destination: { mode: 'connected-read-only' | 'manual'; network: 'base-sepolia'; chainId: 84532; contract: string; address: string };
+  destinationConsent: { version: 'base-destination-intent-v1'; statement: 'I confirm this exact Base Sepolia address is the intended USDC recipient. This records my intent and does not prove that I control the wallet.'; confirmed: true };
+};
+
+export async function createOrderRequest(intent: WalletReadinessIntent): Promise<PublicOrderRequest> {
   const token = await csrf();
   return (await parse<{ request: PublicOrderRequest }>(await fetch('/api/v1/order-requests', {
-    method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-csrf-token': token }, body: '{}',
+    method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', 'x-csrf-token': token }, body: JSON.stringify(intent),
   }))).request;
+}
+
+export type DestinationControlChallenge = { challengeId: string; requestId: string; intentId: string; recipient: string; expiresAt: string; typedData: Record<string, unknown> };
+export async function issueDestinationChallenge(requestId: string): Promise<DestinationControlChallenge> {
+  return (await post<{ challenge: DestinationControlChallenge }>(`/api/v1/order-requests/${encodeURIComponent(requestId)}/destination-challenges`, {}, await csrf())).challenge;
+}
+export async function verifyDestinationChallenge(challengeId: string, signature: string): Promise<void> {
+  await post(`/api/v1/destination-challenges/${encodeURIComponent(challengeId)}/verify`, { signature }, await csrf());
 }
 
 export async function getOrderRequest(id: string): Promise<PublicOrderRequest> {
   return (await parse<{ request: PublicOrderRequest }>(await fetch(`/api/v1/order-requests/${encodeURIComponent(id)}`, { credentials: 'same-origin' }))).request;
+}
+
+export async function getPrivateReceipt(receiptId: string): Promise<PrivateReceipt> {
+  return (await parse<{ receipt: PrivateReceipt }>(await fetch(`/api/v1/receipts/${encodeURIComponent(receiptId)}/private`, { credentials: 'same-origin' }))).receipt;
+}
+
+export async function sendAgentMessage(message: string, locale: 'en' | 'fr' | 'ar'): Promise<AgentReply> {
+  return (await parse<{ reply: AgentReply }>(await fetch('/api/v1/agent/messages', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}) },
+    body: JSON.stringify({ message, locale }),
+  }))).reply;
 }

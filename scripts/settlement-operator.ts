@@ -8,6 +8,7 @@ import { verifyZcashTransaction } from '../server/zcash-verifier.ts';
 import { verifyBaseSepoliaTransaction } from '../server/base-sepolia-verifier.ts';
 import { PrivateVerificationRelay } from '../server/private-verification-relay.ts';
 import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
+import { createBaseSepoliaWalletControlVerifier } from '../server/wallet-control.ts';
 
 function parse(values: string[]): { command: string; options: Record<string, string> } {
   if (values[0] === '--') values.shift(); const [command = 'help', ...rest] = values; const options: Record<string, string> = {};
@@ -33,14 +34,14 @@ try {
       safety: 'allocate-address is the only wallet-mutating command and requires a scoped authorization plus a durable PostgreSQL journal. No command unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds.',
     });
   } else {
-    const encryption = await loadEncryptionKeyring(); const store = new PostgresSettlementStore(pool!, encryption); const controls = new OperatorControlStore();
+    const encryption = await loadEncryptionKeyring(); const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL); const store = new PostgresSettlementStore(pool!, encryption, walletVerifier); const controls = new OperatorControlStore();
     switch (command) {
       case 'status': print({ postgres: await store.health().then(() => ({ ready: true }), error => ({ ready: false, reason: error instanceof Error ? error.message : 'unavailable' })), encryption: { ready: true, activeVersion: encryption.activeVersion }, operatorAuthorizationKey: await inspectOperatorKey(), legacyJson: 'preserved-read-only-not-used-by-production-commands' }); break;
-      case 'pending-requests': print({ requests: (await store.pendingRequests()).map(item => ({ ...item, destinationRecipient: masked(item.destinationRecipient) })) }); break;
+      case 'pending-requests': print({ requests: await store.pendingRequests() }); break;
       case 'accept-request': {
         const operator = required(operatorId, 'Operator ID'); const requestId = required(options.request, 'Request ID');
         if (required(options.terms, 'Exact terms confirmation') !== '0.01 TAZ -> 1 test USDC') throw new Error('Exact terms confirmation must equal: 0.01 TAZ -> 1 test USDC');
-        const result = await store.acceptRequest(requestId, operator, required(options.recipient, 'Operator-confirmed destination recipient'), (binding, id) => controls.signOrderManifest(binding, id));
+        const result = await store.acceptRequest(requestId, operator, (binding, id) => controls.signOrderManifest(binding, id));
         print({ stage: 'REQUEST_ACCEPTED', orderId: result.orderId, manifestSigned: true, signatureDisplayed: false }); break;
       }
       case 'orders': { const snapshot = await store.operatorSnapshot(); print({ ...snapshot, orders: snapshot.orders.map(item => ({ ...item, id: masked(item.id) })), pendingAllocationOperations: snapshot.pendingAllocationOperations.map(item => ({ ...item, allocationId: masked(item.allocationId), orderId: masked(item.orderId), authorizationId: masked(item.authorizationId) })) }); break; }

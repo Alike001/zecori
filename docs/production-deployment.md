@@ -28,7 +28,7 @@ chmod 400 deploy/secrets/db_password deploy/secrets/verifier_token deploy/secret
 chmod 600 .env
 ```
 
-Set `DOMAIN` and the public Base Sepolia receiver in `.env`. Never place wallet cookies, wallet keys, seed material, operator HMAC keys, or database passwords in `.env` or Git.
+Set `DOMAIN` and an operator-approved HTTPS `BASE_SEPOLIA_RPC_URL` in `.env`. There is no fixed or fallback payout recipient: every destination must come from the authenticated owner's immutable intent and satisfy the required wallet-control proof. Never place wallet cookies, wallet keys, seed material, operator HMAC keys, database passwords, or user recipient records in `.env` or Git.
 
 UID/GID `10001` is the pinned unprivileged `zecathon` user inside the image. Local Docker Compose secrets are bind mounts, so the host files must be readable by that numeric owner while remaining unreadable to other host users.
 
@@ -68,7 +68,6 @@ Run the full gate only after secrets and backup paths are staged locally. It val
 
 ```bash
 DOMAIN=swap.example.org \
-ROUTE_DESTINATION_RECIPIENT=0x... \
 DB_PASSWORD_FILE=/secure/db_password \
 VERIFIER_TOKEN_FILE=/secure/verifier_token \
 ZECATHON_ENCRYPTION_KEY_FILE=/secure/encryption-keyring.json \

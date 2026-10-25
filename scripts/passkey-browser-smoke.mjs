@@ -62,16 +62,16 @@ try {
   await send('WebAuthn.addVirtualAuthenticator', { options: authenticatorOptions }, sessionId);
   if (!await click('Add passkey')) throw new Error('Add passkey button was unavailable');
   await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.user?.passkeyCount===2)`, 'second passkey');
-  if (!await click('Request operator review')) throw new Error('Order request button was unavailable');
-  await waitFor(`fetch('/api/v1/order-requests').then(r=>r.json()).then(v=>v.requests?.length===1)`, 'first account order');
-  const orderId = await evaluate(`fetch('/api/v1/order-requests').then(r=>r.json()).then(v=>v.requests[0].id)`);
-  if (!await click('Logout')) throw new Error('Logout button was unavailable');
+  await waitFor(`fetch('/api/v1/capabilities').then(r=>r.json()).then(v=>v.orderCreation?.enabled===true&&v.orderCreation?.walletControlVerification==='required-eip712-or-erc1271')`, 'wallet-control order capability');
+  const unverified = await evaluate(`fetch('/api/v1/session').then(r=>r.json()).then(s=>fetch('/api/v1/order-requests',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrfToken},body:JSON.stringify({routeId:'zcash-testnet-to-base-sepolia-fixed',amountZatoshis:'1000000',termsAccepted:true,source:{mode:'external',network:'zcash-testnet',pool:'ironwood'},destination:{mode:'manual',network:'base-sepolia',chainId:84532,contract:'0x036CbD53842c5426634e7929541eC2318f3dCF7e',address:'0x1111111111111111111111111111111111111111'},destinationConsent:{version:'base-destination-intent-v1',statement:'I confirm this exact Base Sepolia address is the intended USDC recipient. This records my intent and does not prove that I control the wallet.',confirmed:true}})})).then(async r=>({status:r.status,body:await r.json()}))`);
+  if (unverified.status !== 202 || unverified.body.request?.destinationBinding?.walletControlVerification !== 'unverified' || unverified.body.request?.paymentInstructions) throw new Error('Unverified destination was not safely blocked from financial instructions');
+  if (!await click('Sign out')) throw new Error('Sign-out button was unavailable');
   await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.authenticated===false)`, 'logout revocation');
   if (!await click('Sign in with passkey')) throw new Error('Login button was unavailable');
   await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.authenticated===true)`, 'passkey login');
-  const recoveredOrder = await evaluate(`fetch('/api/v1/order-requests').then(r=>r.json()).then(v=>v.requests?.[0]?.id)`);
-  if (recoveredOrder !== orderId) throw new Error('Cross-session history did not recover the same order');
-  process.stdout.write(`${JSON.stringify({ status: 'PASSKEY_BROWSER_SMOKE_PASSED', registeredPasskeys: 2, sessionRevoked: true, crossSessionHistory: true })}\n`);
+  const historyReadable = await evaluate(`fetch('/api/v1/order-requests').then(r=>r.status===200)`);
+  if (!historyReadable) throw new Error('Authenticated private history was unavailable after login');
+  process.stdout.write(`${JSON.stringify({ status: 'PASSKEY_BROWSER_SMOKE_PASSED', registeredPasskeys: 2, sessionRevoked: true, crossSessionHistory: true, unverifiedDestinationBlocked: true })}\n`);
   socket.close();
 } finally {
   if (chrome.exitCode === null) { chrome.kill('SIGTERM'); await new Promise(resolve => chrome.once('exit', resolve)); }

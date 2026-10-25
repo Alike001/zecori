@@ -7,19 +7,24 @@ import type { PublicOrderRequestStore } from './public-order-store.ts';
 import { PostgresPublicOrderRequestStore } from './public-order-store.ts';
 import { createPostgresPool } from './postgres.ts';
 import { publicApi } from './public-api.ts';
-import { isFullEvmAddress } from '../src/lib/order-coordinator.ts';
 import { loadEncryptionKeyring } from './data-encryption.ts';
 import { PostgresPasskeyAuth, type UserIdentityService } from './user-auth.ts';
+import { createAgentGateway, type AgentGateway } from './agent-gateway.ts';
+import { loadAgentProvider } from './agent-provider.ts';
+import { PostgresDestinationWalletControl, UnavailableDestinationWalletControl, type DestinationWalletControlService } from './destination-wallet-control-store.ts';
+import { createBaseSepoliaWalletControlVerifier } from './wallet-control.ts';
 
 export type ApplicationServerOptions = {
   store: PublicOrderRequestStore;
   auth: UserIdentityService;
   publicOrigin: string;
-  destinationRecipient: string;
   staticDirectory?: string;
   requireProxyHttps?: boolean;
   trustProxy?: boolean;
   rateLimit?: { windowMs: number; maximum: number };
+  agentRateLimit?: { windowMs: number; maximum: number };
+  agent?: AgentGateway;
+  walletControl?: DestinationWalletControlService;
 };
 
 const MIME: Record<string, string> = {
@@ -79,13 +84,15 @@ async function serveFile(response: ServerResponse, root: string, requested: stri
 export function createApplicationServer(options: ApplicationServerOptions) {
   const staticDirectory = options.staticDirectory ?? join(fileURLToPath(new URL('..', import.meta.url)), 'dist');
   const limiter = new RateLimiter(options.rateLimit?.windowMs ?? 60_000, options.rateLimit?.maximum ?? 60);
-  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, destinationRecipient: options.destinationRecipient, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth });
+  const agentLimiter = new RateLimiter(options.agentRateLimit?.windowMs ?? 60_000, options.agentRateLimit?.maximum ?? 10);
+  const walletControl = options.walletControl ?? new UnavailableDestinationWalletControl();
+  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), walletControl });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
     securityHeaders(response);
     const url = new URL(request.url ?? '/', 'http://internal');
     if (url.pathname === '/health/live') return json(response, 200, { status: 'live' });
     if (url.pathname === '/health/ready') {
-      try { await access(join(staticDirectory, 'index.html')); await Promise.all([options.store.health(), options.auth.health()]); return json(response, 200, { status: 'ready' }); }
+      try { await access(join(staticDirectory, 'index.html')); await Promise.all([options.store.health(), options.auth.health(), walletControl.health()]); return json(response, 200, { status: 'ready' }); }
       catch { return json(response, 503, { status: 'not-ready' }); }
     }
     const limit = limiter.accept(clientKey(request, Boolean(options.trustProxy)));
@@ -94,6 +101,12 @@ export function createApplicationServer(options: ApplicationServerOptions) {
     response.setHeader('ratelimit-reset', String(Math.ceil(limit.reset / 1000)));
     if (!limit.allowed) return json(response, 429, { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } });
     if (options.requireProxyHttps && request.headers['x-forwarded-proto'] !== 'https') return json(response, 400, { error: { code: 'HTTPS_REQUIRED', message: 'HTTPS is required.' } });
+    if (url.pathname === '/api/v1/agent/messages') {
+      const agentLimit = agentLimiter.accept(`agent:${clientKey(request, Boolean(options.trustProxy))}`);
+      response.setHeader('x-agent-ratelimit-limit', String(options.agentRateLimit?.maximum ?? 10));
+      response.setHeader('x-agent-ratelimit-remaining', String(agentLimit.remaining));
+      if (!agentLimit.allowed) return json(response, 429, { error: { code: 'AGENT_RATE_LIMITED', message: 'Too many assistant requests.' } });
+    }
     if (await api(request, response)) return;
     if (!['GET', 'HEAD'].includes(request.method ?? '')) return json(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } });
     let pathname: string;
@@ -109,8 +122,7 @@ async function start(): Promise<void> {
   const host = process.env.HOST ?? '127.0.0.1';
   const port = Number(process.env.PORT ?? '8787');
   const publicOrigin = process.env.PUBLIC_ORIGIN;
-  const recipient = process.env.ROUTE_DESTINATION_RECIPIENT;
-  if (!publicOrigin || !recipient) throw new Error('PUBLIC_ORIGIN and ROUTE_DESTINATION_RECIPIENT are required');
+  if (!publicOrigin) throw new Error('PUBLIC_ORIGIN is required');
   const parsedOrigin = new URL(publicOrigin);
   if (parsedOrigin.origin !== publicOrigin || parsedOrigin.pathname !== '/' || parsedOrigin.search || parsedOrigin.hash) throw new Error('PUBLIC_ORIGIN must be an exact origin without a path');
   if (process.env.NODE_ENV === 'production' && (parsedOrigin.protocol !== 'https:' || process.env.TRUST_PROXY !== '1')) throw new Error('Production requires an HTTPS PUBLIC_ORIGIN and TRUST_PROXY=1');
@@ -119,11 +131,15 @@ async function start(): Promise<void> {
   if (process.env.NODE_ENV === 'production' && !configuredRpId) throw new Error('Production requires an explicit WEBAUTHN_RP_ID');
   const rpId = configuredRpId ?? parsedOrigin.hostname;
   if (rpId.includes('://') || rpId.includes('/') || !(parsedOrigin.hostname === rpId || parsedOrigin.hostname.endsWith(`.${rpId}`))) throw new Error('WEBAUTHN_RP_ID must equal the public hostname or be its registrable parent domain');
-  if (!isFullEvmAddress(recipient) || /^0x0{40}$/i.test(recipient)) throw new Error('ROUTE_DESTINATION_RECIPIENT must be a non-zero complete Base address');
   const pool = createPostgresPool();
   const encryption = await loadEncryptionKeyring();
   const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecathon Private Routes', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, publicOrigin, destinationRecipient: recipient, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
+  const agentProvider = await loadAgentProvider();
+  const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL);
+  if (!walletVerifier) throw new Error('BASE_SEPOLIA_RPC_URL is required for destination wallet verification');
+  const agentRequestsPerMinute = Number(process.env.AI_AGENT_REQUESTS_PER_MINUTE ?? '10');
+  if (!Number.isSafeInteger(agentRequestsPerMinute) || agentRequestsPerMinute < 1 || agentRequestsPerMinute > 60) throw new Error('AI_AGENT_REQUESTS_PER_MINUTE must be an integer from 1 to 60.');
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

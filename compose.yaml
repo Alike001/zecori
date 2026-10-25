@@ -30,7 +30,7 @@ services:
       PORT: 8787
       TRUST_PROXY: "1"
       PUBLIC_ORIGIN: https://${DOMAIN}
-      ROUTE_DESTINATION_RECIPIENT: ${ROUTE_DESTINATION_RECIPIENT:?Set the public Base Sepolia recipient}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:?Set a trusted Base Sepolia HTTPS RPC URL}
       DB_HOST: postgres
       DB_NAME: zecathon
       DB_USER: zecathon

@@ -11,7 +11,7 @@
     "db:migrate": "node --experimental-strip-types scripts/migrate.ts",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "test": "node --experimental-strip-types --test src/lib/catalogue.test.ts src/lib/route-policy.test.mjs src/lib/order-coordinator.test.ts src/lib/receipt.test.ts src/lib/agent-capabilities.test.ts src/lib/i18n.test.ts server/data-encryption.test.ts server/rpc-client.test.ts server/base-sepolia-verifier.test.ts server/zcash-verifier.test.ts server/private-verification-protocol.test.ts server/zcash-source-config.test.ts server/zcash-source-wallet.test.ts server/zcash-address-allocator.test.ts server/operator-config.test.ts server/operator-control.test.ts server/operator-preflight.test.ts server/order-api.test.ts server/app-server.test.ts server/verifier-service.test.ts server/postgres.integration.test.ts server/user-auth.integration.test.ts && node scripts/verify-readonly.mjs",
+    "test": "node --experimental-strip-types --test src/lib/catalogue.test.ts src/lib/route-policy.test.mjs src/lib/evm-address.test.ts src/lib/order-coordinator.test.ts src/lib/receipt.test.ts src/lib/agent-capabilities.test.ts src/lib/i18n.test.ts src/lib/voice.test.ts src/lib/wallet-readiness.test.ts docker/runtime-command.test.ts server/agent-gateway.test.ts server/agent-response-validation.test.ts server/groq-responses-provider.test.ts server/data-encryption.test.ts server/keyring-canary.test.ts server/rpc-client.test.ts server/base-sepolia-verifier.test.ts server/wallet-control.test.ts server/zcash-verifier.test.ts server/private-verification-protocol.test.ts server/zcash-source-config.test.ts server/zcash-source-wallet.test.ts server/zcash-address-allocator.test.ts server/wallet-intent.test.ts server/operator-config.test.ts server/operator-control.test.ts server/operator-preflight.test.ts server/order-api.test.ts server/app-server.test.ts server/verifier-service.test.ts server/postgres.integration.test.ts server/user-auth.integration.test.ts && node scripts/verify-readonly.mjs",
     "test:server": "node --experimental-strip-types --test server/app-server.test.ts",
     "test:postgres": "node --experimental-strip-types --test server/postgres.integration.test.ts server/user-auth.integration.test.ts",
     "test:zcash-live": "ZCASH_RPC_LIVE=1 node --experimental-strip-types --test --test-name-pattern='live Experiment 03' server/zcash-verifier.test.ts",
@@ -20,17 +20,22 @@
     "privacy:scan": "node scripts/privacy-scan.mjs",
     "security:gate": "node scripts/verify-readonly.mjs",
     "smoke:passkey": "node scripts/passkey-browser-smoke.mjs",
+    "test:browser": "node --experimental-strip-types scripts/milestone-06a-browser-smoke.mjs",
     "staging:gate": "node scripts/staging-preflight.mjs",
     "preflight": "node scripts/production-preflight.mjs",
+    "agent:validate-live": "node --experimental-strip-types scripts/validate-live-ai.ts",
+    "agent:validate-groq-live": "node --experimental-strip-types scripts/validate-live-groq.ts",
     "import:catalogue": "node scripts/import-catalogue.mjs ../../experiments/asset-audit/near-tokens.json"
   },
   "dependencies": {
+    "@noble/hashes": "2.4.0",
     "@simplewebauthn/browser": "13.3.0",
     "@simplewebauthn/server": "13.3.2",
     "lucide-react": "^0.468.0",
     "pg": "^8.23.1",
     "react": "^19.1.1",
-    "react-dom": "^19.1.1"
+    "react-dom": "^19.1.1",
+    "viem": "^2.57.11"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

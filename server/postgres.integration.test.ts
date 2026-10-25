@@ -10,8 +10,26 @@ import { PrivateVerificationRelay } from './private-verification-relay.ts';
 import { relayFingerprint, signRelayEvidence, verifyRelayChallenge, type RelayEvidencePayload } from './private-verification-protocol.ts';
 import { executePostgresAddressAllocation } from './postgres-address-allocation.ts';
 import type { RpcCall } from './rpc-client.ts';
+import { fixedWalletReadinessIntent } from './wallet-intent.ts';
+import { privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
+import { BaseSepoliaWalletControlVerifier, type WalletControlRpc } from './wallet-control.ts';
+import { PostgresDestinationWalletControl } from './destination-wallet-control-store.ts';
 
 const databaseUrl = process.env.POSTGRES_TEST_URL;
+async function ensureUser(pool: ReturnType<typeof createPostgresPool>, ownerId: string): Promise<void> {
+  await pool.query(`INSERT INTO users(user_id,display_name,status,activated_at) VALUES($1,'TEST-ONLY account','ACTIVE',now()) ON CONFLICT (user_id) DO NOTHING`, [ownerId]);
+}
+async function createBoundRequest(store: PostgresPublicOrderRequestStore, pool: ReturnType<typeof createPostgresPool>, ownerId: string, address: string, now?: number) {
+  await ensureUser(pool, ownerId); const request = await store.create(ownerId, fixedWalletReadinessIntent(address), now);
+  const intent = await pool.query<{intent_id:string;recipient_fingerprint:Buffer}>('SELECT intent_id,recipient_fingerprint FROM destination_intents WHERE request_id=$1',[request.id]);
+  const challengeId=randomUUID(); const issued=new Date(now ?? Date.now()); const expires=new Date(issued.getTime()+5*60_000);
+  await pool.query(`INSERT INTO destination_wallet_challenges(challenge_id,intent_id,owner_user_id,session_hash,recipient_fingerprint,nonce_hash,encrypted_challenge,encryption_key_version,issued_at,expires_at,consumed_at,status)
+    VALUES($1,$2,$3,$4,$5,$6,$7,1,$8,$9,$8,'VERIFIED')`,[challengeId,intent.rows[0].intent_id,ownerId,randomBytes(32),intent.rows[0].recipient_fingerprint,randomBytes(32),randomBytes(64),issued,expires]);
+  await pool.query(`INSERT INTO destination_wallet_proofs(proof_id,challenge_id,intent_id,owner_user_id,recipient_fingerprint,method,signature_fingerprint,typed_data_digest,encrypted_proof,encryption_key_version,verification_status,verified_at,verified_block_number,verified_block_hash,last_checked_at)
+    VALUES($1,$2,$3,$4,$5,'EIP712_EOA',$6,$7,$8,1,'VERIFIED',$9,1,$10,$9)`,[randomUUID(),challengeId,intent.rows[0].intent_id,ownerId,intent.rows[0].recipient_fingerprint,randomBytes(32),randomBytes(32),randomBytes(64),issued,randomBytes(32)]);
+  return (await store.get(ownerId,request.id))!;
+}
 function testOnlyTransaction(label: string, orderId: string): string { return createHash('sha256').update(`TEST-ONLY:${label}:${orderId}`).digest('hex'); }
 async function reserveTestAllocation(
   store: PostgresSettlementStore,
@@ -43,19 +61,72 @@ function allocationRpc(address: string, index: string, behavior: { derive?: () =
   };
 }
 
+test('TEST-ONLY wallet-control challenges are owner/session bound, expiring, single-use, concurrent-safe, and restart durable', { skip: !databaseUrl }, async t => {
+  const pool=createPostgresPool(databaseUrl); await migrateDatabase(pool); t.after(async()=>pool.end());
+  const encryption=new DataEncryption({activeVersion:31,keys:new Map([[31,randomBytes(32)]])});
+  const requests=new PostgresPublicOrderRequestStore(pool,encryption); const account=privateKeyToAccount(`0x${'12'.repeat(32)}`);
+  const owner=randomUUID(); const other=randomUUID(); await ensureUser(pool,owner); await ensureUser(pool,other);
+  const request=await requests.create(owner,fixedWalletReadinessIntent(account.address));
+  await assert.rejects(new PostgresSettlementStore(pool,encryption).acceptRequest(request.id,'operator-test',async()=> 'a'.repeat(64)),/valid required wallet-control proof/);
+  const block={number:987654n,hash:`0x${'cd'.repeat(32)}` as Hex};
+  const rpc:WalletControlRpc={chainId:async()=>84532,block:async()=>block,code:async()=> '0x',isValidSignature:async()=>false};
+  const service=new PostgresDestinationWalletControl(pool,encryption,new BaseSepoliaWalletControlVerifier(rpc));
+  const session={userId:owner,displayName:'Owner',csrfToken:'c'.repeat(64),passkeyCount:1,sessionToken:'a'.repeat(64)};
+  const stranger={...session,userId:other,sessionToken:'b'.repeat(64)};
+  await assert.rejects(service.issue(stranger,request.id,'https://zecathon.example'),/not found/);
+  const challenge=await service.issue(session,request.id,'https://zecathon.example');
+  const signed=await account.signTypedData(challenge.typedData as Parameters<typeof account.signTypedData>[0]);
+  const attempts=await Promise.allSettled([service.verify(session,challenge.challengeId,signed,'https://zecathon.example'),service.verify(session,challenge.challengeId,signed,'https://zecathon.example')]);
+  assert.equal(attempts.filter(item=>item.status==='fulfilled').length,1); assert.equal(attempts.filter(item=>item.status==='rejected').length,1);
+  assert.equal((await requests.get(owner,request.id))?.destinationBinding.walletControlVerification,'verified-eoa');
+  await assert.rejects(service.verify(stranger,challenge.challengeId,signed,'https://zecathon.example'),/another session|already used/);
+  await assert.rejects(pool.query(`UPDATE destination_wallet_proofs SET owner_user_id=$2 WHERE intent_id=$1`,[challenge.intentId,other]),/immutable/);
+  await assert.rejects(pool.query(`UPDATE destination_wallet_audit_events SET details='{}'::jsonb WHERE intent_id=$1`,[challenge.intentId]),/append-only/);
+  const restartedPool=createPostgresPool(databaseUrl); const restarted=new PostgresPublicOrderRequestStore(restartedPool,encryption);
+  assert.equal((await restarted.get(owner,request.id))?.destinationBinding.walletControlVerification,'verified-eoa'); await restartedPool.end();
+
+  const reuseRequest=await requests.create(other,fixedWalletReadinessIntent(account.address)); const reuseChallenge=await service.issue(stranger,reuseRequest.id,'https://zecathon.example');
+  await assert.rejects(service.verify(stranger,reuseChallenge.challengeId,signed,'https://zecathon.example'),/does not match|invalid/);
+
+  const expiringAccount=privateKeyToAccount(`0x${'13'.repeat(32)}`); const expiringOwner=randomUUID(); await ensureUser(pool,expiringOwner);
+  const expiringRequest=await requests.create(expiringOwner,fixedWalletReadinessIntent(expiringAccount.address),Date.now());
+  const expiringSession={...session,userId:expiringOwner,sessionToken:'d'.repeat(64)}; const expired=await service.issue(expiringSession,expiringRequest.id,'https://zecathon.example',Date.now());
+  const expiredSignature=await expiringAccount.signTypedData(expired.typedData as Parameters<typeof expiringAccount.signTypedData>[0]);
+  await assert.rejects(service.verify(expiringSession,expired.challengeId,expiredSignature,'https://zecathon.example',Date.now()+6*60_000),/expired/);
+});
+
+test('TEST-ONLY ERC-1271 proof validity changes block acceptance and become durable audit state', { skip: !databaseUrl }, async t => {
+  const pool=createPostgresPool(databaseUrl); await migrateDatabase(pool); t.after(async()=>pool.end());
+  const encryption=new DataEncryption({activeVersion:32,keys:new Map([[32,randomBytes(32)]])}); const requests=new PostgresPublicOrderRequestStore(pool,encryption);
+  const owner=randomUUID(); await ensureUser(pool,owner); const contract=`0x${'77'.repeat(20)}`; const request=await requests.create(owner,fixedWalletReadinessIntent(contract));
+  const block={number:777n,hash:`0x${'de'.repeat(32)}` as Hex}; let valid=true;
+  const rpc:WalletControlRpc={chainId:async()=>84532,block:async()=>block,code:async()=> '0x01',isValidSignature:async()=>valid};
+  const verifier=new BaseSepoliaWalletControlVerifier(rpc); const service=new PostgresDestinationWalletControl(pool,encryption,verifier);
+  const session={userId:owner,displayName:'Contract owner',csrfToken:'e'.repeat(64),passkeyCount:1,sessionToken:'f'.repeat(64)};
+  const challenge=await service.issue(session,request.id,'https://zecathon.example'); await service.verify(session,challenge.challengeId,'0x1234','https://zecathon.example');
+  valid=false; await assert.rejects(new PostgresSettlementStore(pool,encryption,verifier).acceptRequest(request.id,'operator-1271',async()=> 'a'.repeat(64)),/no longer valid/);
+  const state=await pool.query<{verification_status:string}>('SELECT verification_status FROM destination_wallet_proofs WHERE intent_id=$1',[challenge.intentId]);
+  assert.equal(state.rows[0].verification_status,'RECHECK_FAILED');
+  const audit=await pool.query<{event_type:string;details:Record<string,string>}>('SELECT event_type,details FROM destination_wallet_audit_events WHERE intent_id=$1 ORDER BY event_id DESC LIMIT 1',[challenge.intentId]);
+  assert.equal(audit.rows[0].event_type,'PROOF_RECHECK_FAILED'); assert.equal(audit.rows[0].details.checkpoint,'operator-acceptance');
+});
+
 test('PostgreSQL migration, concurrent request idempotency, restart persistence, and immutable audit constraints', { skip: !databaseUrl }, async () => {
   const firstPool = createPostgresPool(databaseUrl);
   await migrateDatabase(firstPool);
-  const firstStore = new PostgresPublicOrderRequestStore(firstPool);
+  const encryption = new DataEncryption({ activeVersion: 1, keys: new Map([[1, randomBytes(32)]]) });
+  const firstStore = new PostgresPublicOrderRequestStore(firstPool, encryption);
   const owner = randomUUID(); const recipient = `0x${'4'.repeat(40)}`;
-  const attempts = await Promise.all(Array.from({ length: 8 }, () => firstStore.create(owner, recipient)));
+  await ensureUser(firstPool, owner);
+  const attempts = await Promise.all(Array.from({ length: 8 }, () => firstStore.create(owner, fixedWalletReadinessIntent(recipient))));
   assert.equal(new Set(attempts.map(item => item.id)).size, 1);
   const id = attempts[0].id;
   await firstPool.end();
 
   const restartedPool = createPostgresPool(databaseUrl);
-  const restartedStore = new PostgresPublicOrderRequestStore(restartedPool);
-  assert.equal((await restartedStore.get(owner, id))?.destinationRecipient, recipient);
+  const restartedStore = new PostgresPublicOrderRequestStore(restartedPool, encryption);
+  assert.equal((await restartedStore.get(owner, id))?.destinationBinding.status, 'confirmed');
+  assert.ok(!JSON.stringify(await restartedStore.get(owner, id)).includes(recipient));
 
   const orderId = randomUUID(); const now = new Date(); const later = new Date(now.getTime() + 3_600_000);
   await restartedPool.query(`INSERT INTO orders
@@ -67,14 +138,35 @@ test('PostgreSQL migration, concurrent request idempotency, restart persistence,
   await restartedPool.end();
 });
 
+test('TEST-ONLY two accounts retain distinct immutable encrypted destinations across conflicts and restart', { skip: !databaseUrl }, async t => {
+  const pool = createPostgresPool(databaseUrl); await migrateDatabase(pool); t.after(() => pool.end());
+  const encryption = new DataEncryption({ activeVersion: 23, keys: new Map([[23, randomBytes(32)]]) });
+  const store = new PostgresPublicOrderRequestStore(pool, encryption); const settlements = new PostgresSettlementStore(pool, encryption);
+  const ownerA = randomUUID(); const ownerB = randomUUID(); const addressA = `0x${'a'.repeat(40)}`; const addressB = `0x${'b'.repeat(40)}`;
+  const requestA = await createBoundRequest(store, pool, ownerA, addressA); const requestB = await createBoundRequest(store, pool, ownerB, addressB);
+  assert.notEqual(requestA.id, requestB.id); assert.equal(await store.get(ownerB, requestA.id), undefined); assert.equal(await store.get(ownerA, requestB.id), undefined);
+  assert.equal((await store.create(ownerA, fixedWalletReadinessIntent(addressA))).id, requestA.id, 'same owner and intent is idempotent');
+  await assert.rejects(store.create(ownerA, fixedWalletReadinessIntent(addressB)), /different immutable destination intent/);
+  await assert.rejects(pool.query(`UPDATE destination_intents SET owner_user_id=$2 WHERE request_id=$1`, [requestA.id, ownerB]), /immutable|foreign key/i);
+  const privateRows = await pool.query<{ encrypted_intent: Buffer }>('SELECT encrypted_intent FROM destination_intents WHERE request_id = ANY($1::uuid[])', [[requestA.id, requestB.id]]);
+  assert.equal(privateRows.rows.length, 2); assert.ok(privateRows.rows.every(row => !row.encrypted_intent.toString().includes(addressA) && !row.encrypted_intent.toString().includes(addressB)));
+  await settlements.acceptRequest(requestA.id, 'operator-binding-test', async binding => {
+    assert.equal(binding.destinationRecipient.toLowerCase(), addressA); assert.equal(binding.version, 2); assert.equal(binding.destinationIntent?.walletControlVerification, 'verified-eip712-eoa'); return 'a'.repeat(64);
+  });
+  await assert.rejects(pool.query(`UPDATE public_order_requests SET owner_user_id=$2 WHERE request_id=$1`, [requestA.id, ownerB]), /foreign key|constraint/i);
+  assert.equal((await store.get(ownerA, requestA.id))?.paymentInstructions, undefined, 'acceptance alone cannot publish a payment receiver');
+  const restartedPool = createPostgresPool(databaseUrl); const restarted = new PostgresPublicOrderRequestStore(restartedPool, encryption);
+  assert.equal((await restarted.get(ownerA, requestA.id))?.destinationBinding.status, 'bound'); await restartedPool.end();
+});
+
 test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped, recoverable, and rollback-safe', { skip: !databaseUrl }, async t => {
   const pool = createPostgresPool(databaseUrl); await migrateDatabase(pool);
   t.after(async () => { await pool.end().catch(() => undefined); });
   const encryption = new DataEncryption({ activeVersion: 7, keys: new Map([[7, randomBytes(32)]]) });
   const requests = new PostgresPublicOrderRequestStore(pool, encryption); const settlements = new PostgresSettlementStore(pool, encryption);
   const owner = randomUUID(); const stranger = randomUUID(); const recipient = `0x${randomBytes(20).toString('hex')}`;
-  const request = await requests.create(owner, recipient);
-  const accepted = await Promise.allSettled(Array.from({ length: 6 }, () => settlements.acceptRequest(request.id, 'operator-integration', recipient, async () => 'a'.repeat(64))));
+  const request = await createBoundRequest(requests, pool, owner, recipient);
+  const accepted = await Promise.allSettled(Array.from({ length: 6 }, () => settlements.acceptRequest(request.id, 'operator-integration', async () => 'a'.repeat(64))));
   assert.equal(accepted.filter(item => item.status === 'fulfilled').length, 1);
   assert.equal(accepted.filter(item => item.status === 'rejected').length, 5);
 
@@ -104,16 +196,16 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   });
   await settlements.observeSource(request.id, sourceTransactionId, sourceVerifier);
 
-  const owner2 = randomUUID(); const request2 = await requests.create(owner2, `0x${randomBytes(20).toString('hex')}`);
-  await settlements.acceptRequest(request2.id, 'operator-integration', request2.destinationRecipient, async () => 'a'.repeat(64));
+  const owner2 = randomUUID(); const request2 = await createBoundRequest(requests, pool, owner2, `0x${randomBytes(20).toString('hex')}`);
+  await settlements.acceptRequest(request2.id, 'operator-integration', async () => 'a'.repeat(64));
   const auth2 = await settlements.issueAuthorization(request2.id, 'ADDRESS_ALLOCATION', 'operator-integration', async () => 'b'.repeat(64));
   const candidate2 = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (diversifierBase + 1n).toString() };
   await reserveTestAllocation(settlements, request2.id, 'operator-integration', auth2, verifyAuthorization, candidate2); await settlements.publishPaymentInstructions(request2.id, 'operator-integration');
   await assert.rejects(settlements.observeSource(request2.id, sourceTransactionId, sourceVerifier), /duplicate key|unique constraint/i);
   assert.equal((await requests.get(owner2, request2.id))?.status, 'PAYMENT_READY');
 
-  const owner3 = randomUUID(); const request3 = await requests.create(owner3, `0x${randomBytes(20).toString('hex')}`);
-  await settlements.acceptRequest(request3.id, 'operator-integration', request3.destinationRecipient, async () => 'a'.repeat(64));
+  const owner3 = randomUUID(); const request3 = await createBoundRequest(requests, pool, owner3, `0x${randomBytes(20).toString('hex')}`);
+  await settlements.acceptRequest(request3.id, 'operator-integration', async () => 'a'.repeat(64));
   const auth3 = await settlements.issueAuthorization(request3.id, 'ADDRESS_ALLOCATION', 'operator-integration', async () => 'b'.repeat(64));
   const candidate3 = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (diversifierBase + 2n).toString() };
   await reserveTestAllocation(settlements, request3.id, 'operator-integration', auth3, verifyAuthorization, candidate3); await settlements.publishPaymentInstructions(request3.id, 'operator-integration');
@@ -140,8 +232,8 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
   const allocationIndexBase = 10_000_000_000_000_000_000n + BigInt(`0x${randomBytes(8).toString('hex')}`) * 100n;
   const verify = async (_domain: string, _payload: string, provided: string) => { if (provided !== signature) throw new Error('forged operator authorization'); };
   const accepted = async (now = Date.now()) => {
-    const owner = randomUUID(); const request = await requests.create(owner, `0x${randomBytes(20).toString('hex')}`, now);
-    await store.acceptRequest(request.id, operatorId, request.destinationRecipient, async () => 'a'.repeat(64), now + 1);
+    const owner = randomUUID(); const request = await createBoundRequest(requests, pool, owner, `0x${randomBytes(20).toString('hex')}`, now);
+    await store.acceptRequest(request.id, operatorId, async () => 'a'.repeat(64), now + 1);
     const authorizationId = await store.issueAuthorization(request.id, 'ADDRESS_ALLOCATION', operatorId, async () => signature, now + 2, 60);
     return { owner, request, authorizationId, now };
   };
@@ -214,8 +306,8 @@ test('TEST-ONLY private verifier relay survives leases, rejects replay, applies 
   const requests = new PostgresPublicOrderRequestStore(pool, encryption); const settlements = new PostgresSettlementStore(pool, encryption);
   const coordinator = generateKeyPairSync('ed25519'); const verifier = generateKeyPairSync('ed25519'); const verifierId = 'operator-zcash-test';
   const relay = new PrivateVerificationRelay(pool, relayEncryption, coordinator.privateKey, new Map([[verifierId, verifier.publicKey]]), encryption);
-  const owner = randomUUID(); const request = await requests.create(owner, `0x${randomBytes(20).toString('hex')}`);
-  await settlements.acceptRequest(request.id, 'operator-relay-test', request.destinationRecipient, async () => 'a'.repeat(64));
+  const owner = randomUUID(); const request = await createBoundRequest(requests, pool, owner, `0x${randomBytes(20).toString('hex')}`);
+  await settlements.acceptRequest(request.id, 'operator-relay-test', async () => 'a'.repeat(64));
   const authorizationId = await settlements.issueAuthorization(request.id, 'ADDRESS_ALLOCATION', 'operator-relay-test', async () => 'b'.repeat(64));
   const verifyAuthorization = async (_domain: string, _payload: string, signature: string) => { if (signature !== 'b'.repeat(64)) throw new Error('forged authorization'); };
   const relayDiversifier = BigInt(`0x${randomBytes(8).toString('hex')}`).toString();
@@ -241,8 +333,8 @@ test('TEST-ONLY private verifier relay survives leases, rejects replay, applies 
   await settlements.applyRelaySourceEvidence(confirmationJob, await relay.verifiedMessage(confirmationJob, coordinator.publicKey, started + 19_000), started + 19_000);
   assert.equal((await requests.get(owner, request.id))?.status, 'SOURCE_CONFIRMED');
 
-  const unresolvedOwner = randomUUID(); const unresolvedRequest = await requests.create(unresolvedOwner, `0x${randomBytes(20).toString('hex')}`, started + 20_000);
-  await settlements.acceptRequest(unresolvedRequest.id, 'operator-relay-test', unresolvedRequest.destinationRecipient, async () => 'a'.repeat(64), started + 20_001);
+  const unresolvedOwner = randomUUID(); const unresolvedRequest = await createBoundRequest(requests, pool, unresolvedOwner, `0x${randomBytes(20).toString('hex')}`, started + 20_000);
+  await settlements.acceptRequest(unresolvedRequest.id, 'operator-relay-test', async () => 'a'.repeat(64), started + 20_001);
   const unresolvedAuthorization = await settlements.issueAuthorization(unresolvedRequest.id, 'ADDRESS_ALLOCATION', 'operator-relay-test', async () => 'b'.repeat(64), started + 20_002);
   const unresolvedCandidate = { ...candidate, allocationId: randomUUID(), address: `utest1${randomBytes(32).toString('hex')}`, diversifierIndex: (BigInt(relayDiversifier) + 1n).toString() };
   await reserveTestAllocation(settlements, unresolvedRequest.id, 'operator-relay-test', unresolvedAuthorization, verifyAuthorization, unresolvedCandidate, started + 20_003); await settlements.publishPaymentInstructions(unresolvedRequest.id, 'operator-relay-test', started + 20_004);

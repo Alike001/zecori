@@ -5,7 +5,7 @@ import {
   confirmSourceEvidence, createOrder, expireOrder, markUnresolved, queuePayoutApproval,
   recordPayoutSubmission, type DestinationReceiptLink, type PaymentOrder, type SourceReceiptLink,
 } from '../src/lib/order-coordinator.ts';
-import { createOperatorOrderBinding, validateOperatorOrderBinding, type OperatorOrderBinding } from '../src/lib/operator-order.ts';
+import { canonicalOperatorOrderBinding, createOperatorOrderBinding, validateOperatorOrderBinding, type OperatorOrderBinding } from '../src/lib/operator-order.ts';
 import { createFinalReceipt, toShareableReceipt, type FinalReceipt, type ShareableReceipt } from '../src/lib/receipt.ts';
 import { verifyBaseSepoliaErc20Receipt, verifyZcashShieldedReceipt } from '../src/lib/read-only-verification.ts';
 import { verifyBaseSepoliaTransaction, type BaseVerificationRequest } from './base-sepolia-verifier.ts';
@@ -15,6 +15,8 @@ import { verifyZcashTransaction, type ZcashVerificationRequest } from './zcash-v
 import type { ValidatedReceivingAddress } from './zcash-address-allocator.ts';
 import { isDeepStrictEqual } from 'node:util';
 import { relayFingerprint, type SignedRelayEvidence } from './private-verification-protocol.ts';
+import { assertDestinationPayload, destinationIntentContext, destinationRecipientFingerprint, digestDestinationIntent, type DestinationIntentPayload } from './destination-intent.ts';
+import { BaseSepoliaWalletControlVerifier, proofContext, type WalletControlProof } from './wallet-control.ts';
 
 type SourceVerifier = (request: ZcashVerificationRequest) => ReturnType<typeof verifyZcashTransaction>;
 type DestinationVerifier = (request: BaseVerificationRequest) => ReturnType<typeof verifyBaseSepoliaTransaction>;
@@ -32,7 +34,7 @@ type OrderRow = {
 };
 
 export type PendingRequest = {
-  requestId: string; createdAt: string; expiresAt: string; destinationRecipient: string;
+  requestId: string; createdAt: string; expiresAt: string; destinationBinding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'verified-eip712-eoa' | 'verified-erc1271';
   terms: typeof PUBLIC_ROUTE_TERMS;
 };
 
@@ -47,6 +49,9 @@ function fingerprint(value: string): Buffer { return createHash('sha256').update
 function orderContext(id: string): string { return `order:${id}:private-state`; }
 function evidenceContext(id: string, chain: string): string { return `order:${id}:evidence:${chain}`; }
 function receiptContext(id: string): string { return `receipt:${id}:private`; }
+function destinationManifestFingerprint(manifest: { binding: OperatorOrderBinding; requestId: string }): Buffer {
+  return createHash('sha256').update(JSON.stringify({ version: 2, requestId: manifest.requestId, binding: canonicalOperatorOrderBinding(manifest.binding) })).digest();
+}
 
 function publicOrder(order: PaymentOrder): Record<string, unknown> {
   return {
@@ -78,37 +83,53 @@ function authorizationDomain(kind: AuthorizationKind) { return kind === 'ADDRESS
 export class PostgresSettlementStore {
   private readonly pool: Pool;
   private readonly encryption: DataEncryption;
-  constructor(pool: Pool, encryption: DataEncryption) { this.pool = pool; this.encryption = encryption; }
+  private readonly walletVerifier?: BaseSepoliaWalletControlVerifier;
+  constructor(pool: Pool, encryption: DataEncryption, walletVerifier?: BaseSepoliaWalletControlVerifier) { this.pool = pool; this.encryption = encryption; this.walletVerifier = walletVerifier; }
 
   async health(): Promise<void> {
-    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation']]);
-    if (result.rowCount !== 3) throw new Error('Settlement, private relay, or crash-safe allocation migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control']]);
+    if (result.rowCount !== 5) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, or wallet-control migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
     await this.pool.query(`UPDATE public_order_requests SET status='EXPIRED', updated_at=$1 WHERE status='AWAITING_OPERATOR' AND expires_at <= $1`, [new Date(now)]);
-    const result = await this.pool.query<{ request_id: string; created_at: Date; expires_at: Date; destination_recipient: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS }>(
-      `SELECT request_id, created_at, expires_at, destination_recipient, immutable_terms FROM public_order_requests WHERE status='AWAITING_OPERATOR' AND expires_at > $1 ORDER BY created_at`, [new Date(now)]);
-    return result.rows.map(row => ({ requestId: row.request_id, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), destinationRecipient: row.destination_recipient, terms: row.immutable_terms }));
+    await this.pool.query(`UPDATE destination_intents d SET status='EXPIRED' FROM public_order_requests r WHERE d.request_id=r.request_id AND d.status='CONFIRMED' AND d.expires_at <= $1`, [new Date(now)]);
+    const result = await this.pool.query<{ request_id: string; created_at: Date; expires_at: Date; immutable_terms: typeof PUBLIC_ROUTE_TERMS; method: 'EIP712_EOA'|'ERC1271' }>(
+      `SELECT r.request_id,r.created_at,r.expires_at,r.immutable_terms,p.method FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id
+       JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id AND p.verification_status='VERIFIED'
+       WHERE r.status='AWAITING_OPERATOR' AND r.destination_binding_version=2 AND d.status='CONFIRMED' AND r.expires_at > $1 ORDER BY r.created_at`, [new Date(now)]);
+    return result.rows.map(row => ({ requestId: row.request_id, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), destinationBinding: 'encrypted-owner-scoped-v2', walletControlVerification: row.method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa', terms: row.immutable_terms }));
   }
 
-  async acceptRequest(requestId: string, operatorId: string, expectedRecipient: string, signer: ManifestSigner, now = Date.now()): Promise<{ orderId: string; signature: string }> {
+  async acceptRequest(requestId: string, operatorId: string, signer: ManifestSigner, now = Date.now()): Promise<{ orderId: string; signature: string }> {
     if (!operatorId.trim()) throw new Error('Operator identity is required');
+    await this.recheckContractProof(requestId, 'operator-acceptance', 'OPERATOR', operatorId, now);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const selected = await client.query<{ request_id: string; owner_session_hash: Buffer; status: string; expires_at: Date; destination_recipient: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS }>(
-        `SELECT request_id, owner_session_hash, status, expires_at, destination_recipient, immutable_terms FROM public_order_requests WHERE request_id=$1 FOR UPDATE`, [requestId]);
+      const selected = await client.query<{ request_id: string; owner_session_hash: Buffer; owner_user_id: string | null; destination_binding_version: number; status: string; expires_at: Date; immutable_terms: typeof PUBLIC_ROUTE_TERMS; intent_id: string | null; encrypted_intent: Buffer | null; consent_digest: Buffer | null; recipient_fingerprint: Buffer | null; intent_status: string | null; proof_method: 'EIP712_EOA'|'ERC1271'|null; proof_digest: Buffer|null; encrypted_proof: Buffer|null; challenge_id: string|null }>(
+        `SELECT r.request_id,r.owner_session_hash,r.owner_user_id,r.destination_binding_version,r.status,r.expires_at,r.immutable_terms,
+          d.intent_id,d.encrypted_intent,d.consent_digest,d.recipient_fingerprint,d.status AS intent_status,
+          p.method AS proof_method,p.typed_data_digest AS proof_digest,p.encrypted_proof,p.challenge_id
+         FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id
+         LEFT JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id AND p.verification_status='VERIFIED'
+         WHERE r.request_id=$1 FOR UPDATE OF r,d`, [requestId]);
       const request = selected.rows[0];
       if (!request) throw new Error('Public request not found');
       if (request.status !== 'AWAITING_OPERATOR') throw new Error('Public request has already been accepted or closed');
-      if (request.destination_recipient.toLowerCase() !== expectedRecipient.toLowerCase()) throw new Error('Operator-confirmed destination recipient does not match the public request');
+      if (request.destination_binding_version !== 2 || !request.owner_user_id || !request.intent_id || !request.encrypted_intent || !request.consent_digest || !request.recipient_fingerprint || request.intent_status !== 'CONFIRMED' || !request.proof_method || !request.proof_digest || !request.encrypted_proof || !request.challenge_id) throw new Error('Request destination binding has no valid required wallet-control proof');
       if (request.expires_at.getTime() <= now) {
         await client.query(`UPDATE public_order_requests SET status='EXPIRED', updated_at=$2 WHERE request_id=$1`, [requestId, new Date(now)]);
         throw new Error('Public request has expired');
       }
       if (!isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Public request terms are no longer eligible');
-      const binding = createOperatorOrderBinding({ orderId: request.request_id, destinationRecipient: request.destination_recipient, expiresAt: request.expires_at.toISOString(), now });
+      const payload = this.encryption.decrypt<DestinationIntentPayload>(request.encrypted_intent, destinationIntentContext(request.intent_id));
+      assertDestinationPayload(payload);
+      if (payload.intentId !== request.intent_id || payload.requestId !== request.request_id || payload.ownerId !== request.owner_user_id || payload.expiresAt !== request.expires_at.toISOString()
+        || !request.owner_session_hash.equals(ownerHash(request.owner_user_id)) || !request.consent_digest.equals(digestDestinationIntent(payload))
+        || !request.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))) throw new Error('Encrypted destination intent does not match its owner-scoped evidence');
+      const destinationIntent = { intentId: request.intent_id, ownerFingerprint: ownerHash(request.owner_user_id).toString('hex'), consentDigest: request.consent_digest.toString('hex'), consentVersion: payload.consentVersion, walletControlVerification: request.proof_method === 'ERC1271' ? 'verified-erc1271' as const : 'verified-eip712-eoa' as const, proofDigest: request.proof_digest.toString('hex') };
+      const binding = createOperatorOrderBinding({ orderId: request.request_id, destinationRecipient: payload.destination.address, expiresAt: request.expires_at.toISOString(), destinationIntent, now });
       validateOperatorOrderBinding(binding, now);
       const signature = await signer(binding, operatorId);
       if (!/^[0-9a-f]{64}$/i.test(signature)) throw new Error('Signed operator manifest is invalid');
@@ -116,12 +137,15 @@ export class PostgresSettlementStore {
       await client.query(`INSERT INTO orders
         (order_id, request_id, owner_session_hash, immutable_manifest, manifest_signature, accepted_by, public_view, encrypted_private_state, encryption_key_version, status, created_at, expires_at, updated_at)
         VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,'CREATED',$9,$10,$9)`, [
-        requestId, request.owner_session_hash, { version: 1, requestId, binding }, Buffer.from(signature, 'hex'), operatorId,
+        requestId, request.owner_session_hash, { version: 2, requestId, binding }, Buffer.from(signature, 'hex'), operatorId,
         { id: requestId, createdAt: new Date(now).toISOString(), status: 'CREATED', expiresAt: binding.expiresAt },
         this.encryption.encrypt(acceptedState, orderContext(requestId)), this.encryption.activeVersion, new Date(now), request.expires_at,
       ]);
+      const manifestFingerprint = destinationManifestFingerprint({ requestId, binding });
+      await client.query(`UPDATE destination_intents SET status='BOUND',bound_at=$2,manifest_fingerprint=$3 WHERE intent_id=$1 AND status='CONFIRMED'`, [request.intent_id, new Date(now), manifestFingerprint]);
+      await client.query(`INSERT INTO destination_intent_events(intent_id,actor_type,actor_fingerprint,event_type,occurred_at,details) VALUES($1,'OPERATOR',$2,'INTENT_BOUND',$3,$4)`, [request.intent_id, fingerprint(operatorId), new Date(now), { requestId, manifestVersion: 2 }]);
       await client.query(`UPDATE public_order_requests SET status='ACCEPTED', linked_order_id=$1, accepted_at=$2, accepted_by=$3, manifest_signature=$4, updated_at=$2 WHERE request_id=$1`, [requestId, new Date(now), operatorId, Buffer.from(signature, 'hex')]);
-      await this.audit(client, requestId, 'OPERATOR', operatorId, 'PUBLIC_REQUEST_ACCEPTED', { requestId, manifestVersion: 1 });
+      await this.audit(client, requestId, 'OPERATOR', operatorId, 'PUBLIC_REQUEST_ACCEPTED', { requestId, manifestVersion: 2, destinationIntentId: request.intent_id, walletControlVerification: destinationIntent.walletControlVerification });
       await client.query('COMMIT');
       return { orderId: requestId, signature };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -129,11 +153,13 @@ export class PostgresSettlementStore {
 
   async issueAuthorization(orderId: string, kind: AuthorizationKind, operatorId: string, signer: AuthorizationSigner, now = Date.now(), ttlSeconds = 900): Promise<string> {
     if (!operatorId.trim() || !Number.isSafeInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 3600) throw new Error('Operator identity and a safe authorization lifetime are required');
+    if (kind === 'PAYOUT') await this.recheckContractProof(orderId, 'payout-authorization', 'OPERATOR', operatorId, now);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN'); const order = await this.lockOrder(client, orderId);
       if (kind === 'ADDRESS_ALLOCATION' && order.status !== 'CREATED') throw new Error('Order is not awaiting allocation authorization');
       if (kind === 'PAYOUT' && this.privateOrder(order).status !== 'PAYOUT_AWAITING_APPROVAL') throw new Error('Order is not awaiting payout authorization');
+      if (kind === 'PAYOUT') await this.assertImmutableDestination(order, client);
       await client.query(`UPDATE authorization_records SET state='EXPIRED',updated_at=$2 WHERE order_id=$1 AND kind=$3 AND state='ISSUED' AND expires_at <= $2`, [orderId, new Date(now), kind]);
       const authorizationId = randomUUID(); const expiresAt = new Date(now + ttlSeconds * 1000);
       const payload = { authorizationId, orderId, kind, operatorId, manifestFingerprint: createHash('sha256').update(JSON.stringify(order.immutable_manifest)).digest('hex'), issuedAt: new Date(now).toISOString(), expiresAt: expiresAt.toISOString() };
@@ -311,6 +337,7 @@ export class PostgresSettlementStore {
     try {
       await client.query('BEGIN');
       const row = await this.lockOrder(client, orderId); const order = this.privateOrder(row);
+      await this.assertImmutableDestination(row, client);
       const allocation = await client.query<{ journal_phase: string }>(`SELECT journal_phase FROM address_allocation_journal WHERE order_id=$1 FOR UPDATE`, [orderId]);
       if (allocation.rows[0]?.journal_phase !== 'RESERVED') throw new Error('A durably reserved allocation is required');
       const next = activateOrder(order, now);
@@ -326,12 +353,14 @@ export class PostgresSettlementStore {
   async observeSource(orderId: string, transactionId: string, verifier: SourceVerifier = verifyZcashTransaction, now = Date.now()): Promise<void> {
     const snapshot = await this.readOrder(orderId); const order = this.privateOrder(snapshot);
     if (order.status !== 'AWAITING_PAYMENT') throw new Error('Order is not awaiting source payment');
+    await this.assertImmutableDestination(snapshot);
     const evidence = await verifier({ orderId, transactionId, receiver: order.sourceReceiver, amountZatoshis: order.sourceAmountZat, expectedDiversifierIndex: order.sourceDiversifierIndex, minimumBlockHeight: order.sourceNotBeforeHeight, minimumBlockTime: Math.floor(Date.parse(order.createdAt) / 1000), requiredPool: 'ironwood', minimumConfirmations: 1 });
     const verified = verifyZcashShieldedReceipt(order, evidence); if (verified.outcome !== 'verified') throw new Error(`Source ${verified.outcome}: ${verified.reason}`);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN'); const locked = await this.lockOrder(client, orderId);
       if (locked.state_version !== snapshot.state_version) throw new Error('Order changed while source evidence was being verified');
+      await this.assertImmutableDestination(locked, client);
       const current = this.privateOrder(locked); const next = attachSourceEvidence(current, sourceLink(evidence), now);
       const reference = fingerprint(`${evidence.transactionId}:${evidence.outputIndex}`);
       await client.query(`INSERT INTO replay_references(chain,reference_fingerprint,order_id,reference_kind,reserved_at) VALUES('zcash-testnet',$1,$2,'SOURCE_OUTPUT',$3)`, [reference, orderId, new Date(now)]);
@@ -345,12 +374,14 @@ export class PostgresSettlementStore {
   async confirmSource(orderId: string, verifier: SourceVerifier = verifyZcashTransaction, now = Date.now()): Promise<void> {
     const snapshot = await this.readOrder(orderId); const order = this.privateOrder(snapshot);
     if (!order.sourceReceipt) throw new Error('No detected source payment exists');
+    await this.assertImmutableDestination(snapshot);
     const evidence = await verifier({ orderId, transactionId: order.sourceReceipt.transactionId, receiver: order.sourceReceiver, amountZatoshis: order.sourceAmountZat, expectedDiversifierIndex: order.sourceDiversifierIndex, minimumBlockHeight: order.sourceNotBeforeHeight, minimumBlockTime: Math.floor(Date.parse(order.createdAt) / 1000), requiredPool: 'ironwood', minimumConfirmations: order.sourceMinimumConfirmations });
     const verified = verifyZcashShieldedReceipt(order, evidence); if (verified.outcome !== 'verified') throw new Error(`Source ${verified.outcome}: ${verified.reason}`);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN'); const locked = await this.lockOrder(client, orderId);
       if (locked.state_version !== snapshot.state_version) throw new Error('Order changed while source confirmations were being verified');
+      await this.assertImmutableDestination(locked, client);
       const next = confirmSourceEvidence(this.privateOrder(locked), sourceLink(evidence));
       await client.query(`UPDATE settlement_evidence SET encrypted_evidence=$2,encryption_key_version=$3,independently_verified_at=$4 WHERE order_id=$1 AND chain='zcash-testnet'`, [orderId, this.encryption.encrypt(evidence, evidenceContext(orderId, 'zcash-testnet')), this.encryption.activeVersion, new Date(now)]);
       await this.updateOrder(client, locked, next, now); await this.syncRequestStatus(client, orderId, next.status, now);
@@ -367,7 +398,7 @@ export class PostgresSettlementStore {
       const jobResult = await client.query<{ order_id: string; phase: 'SOURCE_DETECTION' | 'SOURCE_CONFIRMATION'; state: string; manifest_fingerprint: Buffer; request_fingerprint: Buffer }>('SELECT order_id,phase,state,manifest_fingerprint,request_fingerprint FROM private_verification_jobs WHERE job_id=$1 FOR UPDATE', [jobId]);
       const job = jobResult.rows[0]; if (!job || job.state !== 'RECEIVED') throw new Error('Relay evidence is not ready to apply');
       if (envelope.payload.jobId !== jobId || envelope.payload.orderId !== job.order_id || envelope.payload.phase !== job.phase) throw new Error('Relay job identity mismatch');
-      const row = await this.lockOrder(client, job.order_id); const order = this.privateOrder(row); const evidence = envelope.payload.evidence;
+      const row = await this.lockOrder(client, job.order_id); await this.assertImmutableDestination(row, client); const order = this.privateOrder(row); const evidence = envelope.payload.evidence;
       if (!job.manifest_fingerprint.equals(Buffer.from(relayFingerprint(row.immutable_manifest), 'hex')) || envelope.payload.manifestFingerprint !== job.manifest_fingerprint.toString('hex')) throw new Error('Relay manifest binding mismatch');
       const request: ZcashVerificationRequest = {
         orderId: order.id, transactionId: evidence.transactionId, receiver: order.sourceReceiver, amountZatoshis: order.sourceAmountZat,
@@ -415,7 +446,7 @@ export class PostgresSettlementStore {
 
   async queuePayout(orderId: string, operatorId: string, now = Date.now()): Promise<void> { await this.transition(orderId, 'OPERATOR', operatorId, 'PAYOUT_REVIEW_QUEUED', now, queuePayoutApproval); }
   async approvePayout(orderId: string, operatorId: string, authorizationId: string, verifier: AuthorizationVerifier, now = Date.now()): Promise<void> {
-    const client = await this.pool.connect(); try { await client.query('BEGIN'); const row = await this.lockOrder(client, orderId); await this.consumeAuthorization(client, row, 'PAYOUT', authorizationId, operatorId, verifier, now); const next = authorizePayout(this.privateOrder(row), operatorId, authorizationId, now); await this.updateOrder(client, row, next, now); await this.syncRequestStatus(client, orderId, next.status, now); await this.audit(client, orderId, 'OPERATOR', operatorId, 'PAYOUT_APPROVED', { authorizationId }); await client.query('COMMIT'); } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+    const client = await this.pool.connect(); try { await client.query('BEGIN'); const row = await this.lockOrder(client, orderId); await this.assertImmutableDestination(row, client); await this.consumeAuthorization(client, row, 'PAYOUT', authorizationId, operatorId, verifier, now); const next = authorizePayout(this.privateOrder(row), operatorId, authorizationId, now); await this.updateOrder(client, row, next, now); await this.syncRequestStatus(client, orderId, next.status, now); await this.audit(client, orderId, 'OPERATOR', operatorId, 'PAYOUT_APPROVED', { authorizationId, immutableDestinationVerified: true }); await client.query('COMMIT'); } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
   async recordPayout(orderId: string, operatorId: string, transactionId: string, now = Date.now()): Promise<void> {
     const client = await this.pool.connect();
@@ -429,6 +460,7 @@ export class PostgresSettlementStore {
   async verifyPayout(orderId: string, signer: ReceiptSigner, verifier: DestinationVerifier = verifyBaseSepoliaTransaction, now = Date.now()): Promise<string> {
     const snapshot = await this.readOrder(orderId); const order = this.privateOrder(snapshot);
     if (!order.payoutTransactionId || order.status !== 'PAYOUT_SUBMITTED') throw new Error('No approved payout submission exists');
+    await this.assertImmutableDestination(snapshot);
     const evidence = await verifier({ orderId, transactionId: order.payoutTransactionId, recipient: order.destinationRecipient, amountAtomic: order.destinationAmountAtomic, minimumConfirmations: order.destinationMinimumConfirmations });
     const checked = verifyBaseSepoliaErc20Receipt(order, evidence); if (checked.outcome !== 'verified') throw new Error(`Destination ${checked.outcome}: ${checked.reason}`);
     const destination: DestinationReceiptLink = { ...checked, amountAtomic: evidence.amountAtomic };
@@ -436,6 +468,7 @@ export class PostgresSettlementStore {
     try {
       await client.query('BEGIN'); const locked = await this.lockOrder(client, orderId);
       if (locked.state_version !== snapshot.state_version) throw new Error('Order changed while destination evidence was being verified');
+      await this.assertImmutableDestination(locked, client);
       const current = this.privateOrder(locked); const withDestination = attachDestinationEvidence(current, destination);
       const receipt = createFinalReceipt(withDestination, withDestination.sourceReceipt!, destination, randomUUID());
       const signature = await signer(canonicalReceipt(receipt));
@@ -506,12 +539,60 @@ export class PostgresSettlementStore {
   }
   private async validateAcceptedOrder(client: PoolClient, order: OrderRow, operatorId: string, now: number): Promise<void> {
     if (order.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
-    const requestResult = await client.query<{ owner_session_hash: Buffer; status: string; linked_order_id: string; destination_recipient: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS; expires_at: Date }>(`SELECT owner_session_hash,status,linked_order_id,destination_recipient,immutable_terms,expires_at FROM public_order_requests WHERE request_id=$1 FOR UPDATE`, [order.order_id]);
+    const requestResult = await client.query<{ owner_session_hash: Buffer; owner_user_id: string; status: string; linked_order_id: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS; expires_at: Date; destination_binding_version: number; intent_id: string; encrypted_intent: Buffer; consent_digest: Buffer; recipient_fingerprint: Buffer; manifest_fingerprint: Buffer; intent_status: string; proof_method: 'EIP712_EOA'|'ERC1271'; proof_digest: Buffer; proof_status: string }>(`SELECT r.owner_session_hash,r.owner_user_id,r.status,r.linked_order_id,r.immutable_terms,r.expires_at,r.destination_binding_version,
+      d.intent_id,d.encrypted_intent,d.consent_digest,d.recipient_fingerprint,d.manifest_fingerprint,d.status AS intent_status,
+      p.method AS proof_method,p.typed_data_digest AS proof_digest,p.verification_status AS proof_status
+      FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id
+      WHERE r.request_id=$1 FOR UPDATE OF r,d,p`, [order.order_id]);
     const request = requestResult.rows[0]; const manifest = order.immutable_manifest.binding;
     if (!request || request.status !== 'ACCEPTED' || request.linked_order_id !== order.order_id || !request.owner_session_hash.equals(order.owner_session_hash)) throw new Error('Accepted order owner or request binding is invalid');
     if (order.immutable_manifest.requestId !== order.order_id || manifest.orderId !== order.order_id) throw new Error('Order manifest identity mismatch');
-    if (request.destination_recipient.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order terms do not match the immutable request');
+    if (request.destination_binding_version !== 2 || request.intent_status !== 'BOUND' || manifest.version !== 2 || !manifest.destinationIntent) throw new Error('Accepted order has no complete owner destination binding');
+    const payload = this.encryption.decrypt<DestinationIntentPayload>(request.encrypted_intent, destinationIntentContext(request.intent_id)); assertDestinationPayload(payload);
+    if (payload.ownerId !== request.owner_user_id || payload.requestId !== order.order_id || payload.intentId !== request.intent_id || !request.owner_session_hash.equals(ownerHash(request.owner_user_id))) throw new Error('Accepted order owner intent evidence does not match');
+    if (!request.consent_digest.equals(digestDestinationIntent(payload)) || !request.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))) throw new Error('Accepted order consent or recipient fingerprint does not match');
+    if (!request.manifest_fingerprint.equals(destinationManifestFingerprint(order.immutable_manifest))) throw new Error('Accepted order manifest fingerprint does not match');
+    const expectedVerification = request.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa';
+    if (request.proof_status !== 'VERIFIED' || manifest.destinationIntent.intentId !== request.intent_id || manifest.destinationIntent.ownerFingerprint !== ownerHash(request.owner_user_id).toString('hex') || manifest.destinationIntent.consentDigest !== request.consent_digest.toString('hex') || manifest.destinationIntent.walletControlVerification !== expectedVerification || manifest.destinationIntent.proofDigest !== request.proof_digest.toString('hex')) throw new Error('Accepted order manifest destination metadata does not match');
+    if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order route terms do not match the immutable destination request');
     validateOperatorOrderBinding(manifest, now);
+  }
+
+  private async assertImmutableDestination(order: OrderRow, client: PoolClient | Pool = this.pool): Promise<void> {
+    const manifest = order.immutable_manifest.binding;
+    const result = await client.query<{ intent_id: string; owner_user_id: string; encrypted_intent: Buffer; consent_digest: Buffer; recipient_fingerprint: Buffer; manifest_fingerprint: Buffer; status: string; proof_method:'EIP712_EOA'|'ERC1271'; proof_digest:Buffer; encrypted_proof:Buffer; challenge_id:string; proof_status:string }>(`SELECT d.intent_id,d.owner_user_id,d.encrypted_intent,d.consent_digest,d.recipient_fingerprint,d.manifest_fingerprint,d.status,
+      p.method AS proof_method,p.typed_data_digest AS proof_digest,p.encrypted_proof,p.challenge_id,p.verification_status AS proof_status
+      FROM destination_intents d JOIN public_order_requests r ON r.request_id=d.request_id JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id WHERE d.request_id=$1`, [order.order_id]);
+    const record = result.rows[0];
+    if (!record || record.status !== 'BOUND' || manifest.version !== 2 || !manifest.destinationIntent) throw new Error('Payout destination has no immutable owner binding');
+    const payload = this.encryption.decrypt<DestinationIntentPayload>(record.encrypted_intent, destinationIntentContext(record.intent_id)); assertDestinationPayload(payload);
+    if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || payload.ownerId !== record.owner_user_id
+      || !record.consent_digest.equals(digestDestinationIntent(payload)) || !record.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))
+      || !record.manifest_fingerprint.equals(destinationManifestFingerprint(order.immutable_manifest)) || record.proof_status !== 'VERIFIED'
+      || manifest.destinationIntent.intentId !== record.intent_id || manifest.destinationIntent.consentDigest !== record.consent_digest.toString('hex')
+      || manifest.destinationIntent.proofDigest !== record.proof_digest.toString('hex')) throw new Error('Payout destination does not match the immutable owner intent');
+  }
+  private async recheckContractProof(requestId: string, checkpoint: string, actorType: 'OPERATOR'|'SYSTEM', actorId: string|undefined, now: number): Promise<void> {
+    const result=await this.pool.query<{proof_id:string;intent_id:string;challenge_id:string;method:'EIP712_EOA'|'ERC1271';encrypted_proof:Buffer;encrypted_intent:Buffer}>(`SELECT p.proof_id,p.intent_id,p.challenge_id,p.method,p.encrypted_proof,d.encrypted_intent
+      FROM destination_wallet_proofs p JOIN destination_intents d ON d.intent_id=p.intent_id WHERE d.request_id=$1 AND p.verification_status='VERIFIED'`,[requestId]);
+    const row=result.rows[0]; if(!row||row.method!=='ERC1271') return;
+    if(!this.walletVerifier) throw Object.assign(new Error('ERC-1271 checkpoint verification is unavailable'),{code:'WALLET_VERIFICATION_UNAVAILABLE'});
+    const payload=this.encryption.decrypt<DestinationIntentPayload>(row.encrypted_intent,destinationIntentContext(row.intent_id));
+    const proof=this.encryption.decrypt<WalletControlProof>(row.encrypted_proof,proofContext(row.challenge_id));
+    try {
+      await this.walletVerifier.recheck(payload.destination.address as `0x${string}`,proof);
+      await this.pool.query(`WITH updated AS (UPDATE destination_wallet_proofs SET last_checked_at=$2 WHERE proof_id=$1 AND verification_status='VERIFIED' RETURNING intent_id,challenge_id)
+        INSERT INTO destination_wallet_audit_events(intent_id,challenge_id,actor_type,actor_fingerprint,event_type,occurred_at,details)
+        SELECT intent_id,challenge_id,$3,$4,'PROOF_RECHECKED',$2,$5 FROM updated`,[row.proof_id,new Date(now),actorType,actorId?fingerprint(actorId):null,{checkpoint}]);
+    } catch(error) {
+      const invalid=(error as {code?:string}).code==='ERC1271_PROOF_NO_LONGER_VALID';
+      const client=await this.pool.connect(); try { await client.query('BEGIN');
+        if(invalid) await client.query(`UPDATE destination_wallet_proofs SET verification_status='RECHECK_FAILED',last_checked_at=$2 WHERE proof_id=$1 AND verification_status='VERIFIED'`,[row.proof_id,new Date(now)]);
+        await client.query(`INSERT INTO destination_wallet_audit_events(intent_id,challenge_id,actor_type,actor_fingerprint,event_type,occurred_at,details) VALUES($1,$2,$3,$4,'PROOF_RECHECK_FAILED',$5,$6)`,[row.intent_id,row.challenge_id,actorType,actorId?fingerprint(actorId):null,new Date(now),{checkpoint,reasonCode:(error as {code?:string}).code??'RECHECK_FAILED'}]);
+        await client.query('COMMIT');
+      } catch(recordError){await client.query('ROLLBACK');throw recordError;} finally{client.release();}
+      throw error;
+    }
   }
   private async verifyAuthorization(client: PoolClient, order: OrderRow, kind: AuthorizationKind, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, allowedStates: string[], now: number) {
     const result = await client.query<{ state: string; operator_id: string; expires_at: Date; target: string; signed_payload: Record<string, unknown>; signature: Buffer; manifest_fingerprint: Buffer }>(`SELECT state,operator_id,expires_at,target,signed_payload,signature,manifest_fingerprint FROM authorization_records WHERE authorization_id=$1 AND order_id=$2 AND kind=$3 FOR UPDATE`, [authorizationId, order.order_id, kind]);
