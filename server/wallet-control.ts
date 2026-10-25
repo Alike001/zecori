@@ -39,6 +39,8 @@ export type WalletControlRpc = {
   isValidSignature(address: Address, digest: Hex, signature: Hex, blockHash: Hex): Promise<boolean>;
 };
 
+export type WalletControlPolicy = { allowContractWallets: boolean };
+
 const ERC1271_ABI = [{ type: 'function', name: 'isValidSignature', stateMutability: 'view', inputs: [{ name: 'hash', type: 'bytes32' }, { name: 'signature', type: 'bytes' }], outputs: [{ name: 'magicValue', type: 'bytes4' }] }] as const;
 const ERC1271_MAGIC = '0x1626ba7e';
 
@@ -69,7 +71,8 @@ export function typedDataDigest(typedData: DestinationControlTypedData): Hex { r
 
 export class BaseSepoliaWalletControlVerifier {
   private readonly rpc: WalletControlRpc;
-  constructor(rpc: WalletControlRpc) { this.rpc = rpc; }
+  readonly policy: WalletControlPolicy;
+  constructor(rpc: WalletControlRpc, policy: WalletControlPolicy = { allowContractWallets: false }) { this.rpc = rpc; this.policy = policy; }
   async verify(typedData: DestinationControlTypedData, signature: Hex, now = Date.now()): Promise<WalletControlProof> {
     if (!/^0x[0-9a-f]+$/i.test(signature) || signature.length < 4 || signature.length > 16_386) throw Object.assign(new Error('Wallet signature encoding is invalid.'), { code: 'INVALID_WALLET_SIGNATURE' });
     if (typedData.message.chainId !== WALLET_CONTROL_CHAIN_ID || typedData.domain.chainId !== WALLET_CONTROL_CHAIN_ID) throw new Error('Wallet-control chain binding is invalid');
@@ -86,6 +89,7 @@ export class BaseSepoliaWalletControlVerifier {
       if (recovered.toLowerCase() !== recipient.toLowerCase()) throw Object.assign(new Error('Wallet signature does not match the immutable recipient.'), { code: 'WALLET_SIGNER_MISMATCH' });
       method = 'EIP712_EOA';
     } else {
+      if (!this.policy.allowContractWallets) throw Object.assign(new Error('Contract-wallet destination verification is disabled for this release.'), { code: 'CONTRACT_WALLET_DISABLED' });
       let valid = false;
       try { valid = await this.rpc.isValidSignature(recipient, digest, signature, block.hash); }
       catch { throw Object.assign(new Error('Trusted ERC-1271 verification is unavailable.'), { statusCode: 503, code: 'WALLET_VERIFICATION_UNAVAILABLE' }); }
@@ -96,6 +100,7 @@ export class BaseSepoliaWalletControlVerifier {
   }
   async recheck(recipient: Address, proof: WalletControlProof): Promise<void> {
     if (proof.method !== 'ERC1271') return;
+    if (!this.policy.allowContractWallets) throw Object.assign(new Error('Contract-wallet execution is disabled for this release.'), { code: 'CONTRACT_WALLET_DISABLED' });
     let block: { number: bigint; hash: Hex }; let valid = false;
     try { const state=await Promise.all([this.rpc.chainId(),this.rpc.block()]); if(state[0]!==WALLET_CONTROL_CHAIN_ID) throw new Error('wrong chain'); block=state[1]; valid = await this.rpc.isValidSignature(recipient, proof.digest, proof.signature, block.hash); }
     catch { throw Object.assign(new Error('Trusted ERC-1271 checkpoint verification is unavailable.'), { code: 'WALLET_VERIFICATION_UNAVAILABLE' }); }
@@ -103,7 +108,13 @@ export class BaseSepoliaWalletControlVerifier {
   }
 }
 
-export function createBaseSepoliaWalletControlVerifier(rpcUrl: string | undefined): BaseSepoliaWalletControlVerifier | undefined {
+export function contractWalletPolicy(value: string | undefined): WalletControlPolicy {
+  if (value === undefined || value === '' || value === '0') return { allowContractWallets: false };
+  if (value === '1') return { allowContractWallets: true };
+  throw new Error('ZECATHON_ERC1271_ENABLED must be exactly 0 or 1');
+}
+
+export function createBaseSepoliaWalletControlVerifier(rpcUrl: string | undefined, policy: WalletControlPolicy = { allowContractWallets: false }): BaseSepoliaWalletControlVerifier | undefined {
   if (!rpcUrl) return undefined;
   const endpoint = baseSepoliaRpcUrl({ BASE_SEPOLIA_RPC_URL: rpcUrl });
   const client = createPublicClient({ chain: baseSepolia, transport: http(endpoint, { timeout: 10_000, retryCount: 1 }) });
@@ -117,5 +128,5 @@ export function createBaseSepoliaWalletControlVerifier(rpcUrl: string | undefine
       return decodeFunctionResult({ abi: ERC1271_ABI, functionName: 'isValidSignature', data: result.data }).toLowerCase() === ERC1271_MAGIC;
     },
   };
-  return new BaseSepoliaWalletControlVerifier(rpc);
+  return new BaseSepoliaWalletControlVerifier(rpc, policy);
 }

@@ -31,6 +31,7 @@ services:
       TRUST_PROXY: "1"
       PUBLIC_ORIGIN: https://${DOMAIN}
       BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:?Set a trusted Base Sepolia HTTPS RPC URL}
+      ZECATHON_ERC1271_ENABLED: "0"
       DB_HOST: postgres
       DB_NAME: zecathon
       DB_USER: zecathon

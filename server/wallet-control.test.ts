@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Address, Hex } from 'viem';
-import { BaseSepoliaWalletControlVerifier, destinationControlTypedData, typedDataDigest, type WalletControlRpc } from './wallet-control.ts';
+import { BaseSepoliaWalletControlVerifier, contractWalletPolicy, destinationControlTypedData, typedDataDigest, type WalletControlRpc } from './wallet-control.ts';
 
 const account = privateKeyToAccount(`0x${'11'.repeat(32)}`);
 const now = Date.parse('2026-10-25T12:00:00.000Z');
@@ -34,12 +34,22 @@ test('ERC-1271 is checked at a pinned block and fails closed when RPC or recheck
   const verifier = new BaseSepoliaWalletControlVerifier(rpc({
     code: async () => '0x01',
     isValidSignature: async (_address, digest, _signature, blockHash) => { calls.push(blockHash === block.hash ? block.number : -1n); assert.equal(digest, typedDataDigest(typedData)); return valid; },
-  }));
+  }), { allowContractWallets: true });
   const proof = await verifier.verify(typedData, '0x1234', now+1); assert.equal(proof.method, 'ERC1271'); assert.deepEqual(calls, [block.number]);
   await verifier.recheck(account.address, proof); assert.deepEqual(calls, [block.number, block.number]);
   valid=false; await assert.rejects(verifier.recheck(account.address,proof),/no longer valid/);
   await assert.rejects(new BaseSepoliaWalletControlVerifier(rpc({ block: async () => { throw new Error('offline'); } })).verify(typedData, '0x1234', now+1), /unavailable/);
   await assert.rejects(new BaseSepoliaWalletControlVerifier(rpc({ chainId:async()=>1 })).verify(typedData, '0x1234', now+1), /unavailable/);
   await assert.rejects(new BaseSepoliaWalletControlVerifier(rpc({ code:async(_address,blockHash)=>{ assert.equal(blockHash,block.hash); throw new Error('block is not canonical'); } })).verify(typedData, '0x1234', now+1), /unavailable/);
-  await assert.rejects(new BaseSepoliaWalletControlVerifier(rpc({ code: async () => '0x01', isValidSignature: async () => false })).verify(typedData, '0x1234', now+1), /rejected/);
+  await assert.rejects(new BaseSepoliaWalletControlVerifier(rpc({ code: async () => '0x01', isValidSignature: async () => false }), { allowContractWallets: true }).verify(typedData, '0x1234', now+1), /rejected/);
+});
+
+test('contract-wallet capability is disabled by default and configuration is fail-closed', async () => {
+  const disabled = new BaseSepoliaWalletControlVerifier(rpc({ code: async () => '0x01', isValidSignature: async () => true }));
+  await assert.rejects(disabled.verify(typedData, '0x1234', now+1), /disabled/);
+  await assert.rejects(disabled.recheck(account.address, { method:'ERC1271', digest:typedDataDigest(typedData), signature:'0x1234', verifiedAt:new Date(now).toISOString(), blockNumber:'1', blockHash:block.hash }), /disabled/);
+  assert.deepEqual(contractWalletPolicy(undefined), { allowContractWallets:false });
+  assert.deepEqual(contractWalletPolicy('0'), { allowContractWallets:false });
+  assert.deepEqual(contractWalletPolicy('1'), { allowContractWallets:true });
+  assert.throws(() => contractWalletPolicy('true'), /exactly 0 or 1/);
 });

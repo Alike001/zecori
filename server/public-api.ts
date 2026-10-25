@@ -7,13 +7,13 @@ import type { AgentGateway } from './agent-gateway.ts';
 import { validateWalletReadinessIntent } from './wallet-intent.ts';
 import type { DestinationWalletControlService } from './destination-wallet-control-store.ts';
 
-type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; walletControl: DestinationWalletControlService };
+type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; walletControl: DestinationWalletControlService; contractWalletsEnabled?: boolean };
 
-const ORDER_CREATION = Object.freeze({
+function orderCreation(contractWalletsEnabled: boolean) { return Object.freeze({
   enabled: true as const,
   binding: 'encrypted-owner-scoped-v2' as const,
-  walletControlVerification: 'required-eip712-or-erc1271' as const,
-});
+  walletControlVerification: contractWalletsEnabled ? 'required-eip712-or-erc1271' as const : 'required-eip712-eoa' as const,
+}); }
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
   response.statusCode = status;
@@ -93,10 +93,10 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
         writeJson(response, 200, {
           apiVersion: 'v1', execution: 'operator-approved-testnet-only', route: PUBLIC_ROUTE_TERMS,
           routeId: 'zcash-testnet-to-base-sepolia-fixed', classification: 'fixed-test-terms',
-          orderCreation: ORDER_CREATION,
+          orderCreation: orderCreation(Boolean(options.contractWalletsEnabled)),
           wallets: {
             zcash: { network: 'zcash-testnet', pool: 'ironwood', connectedMode: 'read-only-capability-check', externalMode: true },
-            base: { network: 'base-sepolia', chainId: 84532, contract: PUBLIC_ROUTE_TERMS.destination.contract, connectedMode: 'user-initiated-eip712', manualRecipient: true, addressIntentConfirmation: true, walletControlVerified: true, supportedProofs: ['EIP-712 EOA','ERC-1271 deployed contract'] },
+            base: { network: 'base-sepolia', chainId: 84532, contract: PUBLIC_ROUTE_TERMS.destination.contract, connectedMode: 'user-initiated-eip712', manualRecipient: true, addressIntentConfirmation: true, walletControlVerified: true, supportedProofs: options.contractWalletsEnabled ? ['EIP-712 EOA','ERC-1271 deployed contract'] : ['EIP-712 EOA'], contractWallets: options.contractWalletsEnabled ? 'experimental-enabled' : 'disabled-until-live-validation' },
           },
           agent: options.agent.status,
         }); return true;

@@ -12,7 +12,7 @@ import { PostgresPasskeyAuth, type UserIdentityService } from './user-auth.ts';
 import { createAgentGateway, type AgentGateway } from './agent-gateway.ts';
 import { loadAgentProvider } from './agent-provider.ts';
 import { PostgresDestinationWalletControl, UnavailableDestinationWalletControl, type DestinationWalletControlService } from './destination-wallet-control-store.ts';
-import { createBaseSepoliaWalletControlVerifier } from './wallet-control.ts';
+import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from './wallet-control.ts';
 
 export type ApplicationServerOptions = {
   store: PublicOrderRequestStore;
@@ -25,6 +25,7 @@ export type ApplicationServerOptions = {
   agentRateLimit?: { windowMs: number; maximum: number };
   agent?: AgentGateway;
   walletControl?: DestinationWalletControlService;
+  contractWalletsEnabled?: boolean;
 };
 
 const MIME: Record<string, string> = {
@@ -86,7 +87,7 @@ export function createApplicationServer(options: ApplicationServerOptions) {
   const limiter = new RateLimiter(options.rateLimit?.windowMs ?? 60_000, options.rateLimit?.maximum ?? 60);
   const agentLimiter = new RateLimiter(options.agentRateLimit?.windowMs ?? 60_000, options.agentRateLimit?.maximum ?? 10);
   const walletControl = options.walletControl ?? new UnavailableDestinationWalletControl();
-  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), walletControl });
+  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled) });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
     securityHeaders(response);
     const url = new URL(request.url ?? '/', 'http://internal');
@@ -135,11 +136,12 @@ async function start(): Promise<void> {
   const encryption = await loadEncryptionKeyring();
   const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecathon Private Routes', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
   const agentProvider = await loadAgentProvider();
-  const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL);
+  const walletPolicy = contractWalletPolicy(process.env.ZECATHON_ERC1271_ENABLED);
+  const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL, walletPolicy);
   if (!walletVerifier) throw new Error('BASE_SEPOLIA_RPC_URL is required for destination wallet verification');
   const agentRequestsPerMinute = Number(process.env.AI_AGENT_REQUESTS_PER_MINUTE ?? '10');
   if (!Number.isSafeInteger(agentRequestsPerMinute) || agentRequestsPerMinute < 1 || agentRequestsPerMinute > 60) throw new Error('AI_AGENT_REQUESTS_PER_MINUTE must be an integer from 1 to 60.');
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

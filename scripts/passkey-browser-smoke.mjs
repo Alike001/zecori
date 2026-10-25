@@ -47,7 +47,7 @@ try {
   };
   const waitFor = async (expression, description) => {
     for (let attempt = 0; attempt < 100; attempt += 1) {
-      if (await evaluate(expression)) return; await new Promise(resolve => setTimeout(resolve, 100));
+      const value = await evaluate(expression); if (value) return value; await new Promise(resolve => setTimeout(resolve, 100));
     }
     const state = await evaluate(`({ href: location.href, ready: document.readyState, body: document.body?.innerText?.slice(0,500) })`);
     throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(state)}`);
@@ -56,13 +56,16 @@ try {
 
   await waitFor(`document.querySelector('input[placeholder="Private account label"]') !== null`, 'identity form');
   await evaluate(`(() => { const input=document.querySelector('input[placeholder="Private account label"]'); const setter=Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set; setter.call(input,'TEST-ONLY browser account'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  await waitFor(`[...document.querySelectorAll('button')].some(item=>item.textContent.includes('Create with passkey')&&!item.disabled)`, 'enabled passkey registration');
   if (!await click('Create with passkey')) throw new Error('Registration button was unavailable');
-  await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.authenticated===true)`, 'passkey registration');
+  const registration = await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.authenticated===true?'authenticated':(document.querySelector('[role="alert"]')?.textContent||''))`, 'passkey registration');
+  if (registration !== 'authenticated') throw new Error(`Passkey registration failed in browser: ${registration}`);
   await send('WebAuthn.removeVirtualAuthenticator', { authenticatorId: firstAuthenticatorId }, sessionId);
   await send('WebAuthn.addVirtualAuthenticator', { options: authenticatorOptions }, sessionId);
   if (!await click('Add passkey')) throw new Error('Add passkey button was unavailable');
-  await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.user?.passkeyCount===2)`, 'second passkey');
-  await waitFor(`fetch('/api/v1/capabilities').then(r=>r.json()).then(v=>v.orderCreation?.enabled===true&&v.orderCreation?.walletControlVerification==='required-eip712-or-erc1271')`, 'wallet-control order capability');
+  const added = await waitFor(`fetch('/api/v1/session').then(r=>r.json()).then(v=>v.user?.passkeyCount===2?'added':(document.querySelector('[role="alert"]')?.textContent||''))`, 'second passkey');
+  if (added !== 'added') throw new Error(`Second passkey registration failed in browser: ${added}`);
+  await waitFor(`fetch('/api/v1/capabilities').then(r=>r.json()).then(v=>v.orderCreation?.enabled===true&&v.orderCreation?.walletControlVerification==='required-eip712-eoa'&&v.wallets?.base?.contractWallets==='disabled-until-live-validation')`, 'EOA-only wallet-control order capability');
   const unverified = await evaluate(`fetch('/api/v1/session').then(r=>r.json()).then(s=>fetch('/api/v1/order-requests',{method:'POST',headers:{'content-type':'application/json','x-csrf-token':s.csrfToken},body:JSON.stringify({routeId:'zcash-testnet-to-base-sepolia-fixed',amountZatoshis:'1000000',termsAccepted:true,source:{mode:'external',network:'zcash-testnet',pool:'ironwood'},destination:{mode:'manual',network:'base-sepolia',chainId:84532,contract:'0x036CbD53842c5426634e7929541eC2318f3dCF7e',address:'0x1111111111111111111111111111111111111111'},destinationConsent:{version:'base-destination-intent-v1',statement:'I confirm this exact Base Sepolia address is the intended USDC recipient. This records my intent and does not prove that I control the wallet.',confirmed:true}})})).then(async r=>({status:r.status,body:await r.json()}))`);
   if (unverified.status !== 202 || unverified.body.request?.destinationBinding?.walletControlVerification !== 'unverified' || unverified.body.request?.paymentInstructions) throw new Error('Unverified destination was not safely blocked from financial instructions');
   if (!await click('Sign out')) throw new Error('Sign-out button was unavailable');

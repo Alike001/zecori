@@ -101,9 +101,12 @@ test('TEST-ONLY ERC-1271 proof validity changes block acceptance and become dura
   const owner=randomUUID(); await ensureUser(pool,owner); const contract=`0x${'77'.repeat(20)}`; const request=await requests.create(owner,fixedWalletReadinessIntent(contract));
   const block={number:777n,hash:`0x${'de'.repeat(32)}` as Hex}; let valid=true;
   const rpc:WalletControlRpc={chainId:async()=>84532,block:async()=>block,code:async()=> '0x01',isValidSignature:async()=>valid};
-  const verifier=new BaseSepoliaWalletControlVerifier(rpc); const service=new PostgresDestinationWalletControl(pool,encryption,verifier);
+  const verifier=new BaseSepoliaWalletControlVerifier(rpc,{allowContractWallets:true}); const service=new PostgresDestinationWalletControl(pool,encryption,verifier);
   const session={userId:owner,displayName:'Contract owner',csrfToken:'e'.repeat(64),passkeyCount:1,sessionToken:'f'.repeat(64)};
   const challenge=await service.issue(session,request.id,'https://zecathon.example'); await service.verify(session,challenge.challengeId,'0x1234','https://zecathon.example');
+  const disabledStore=new PostgresSettlementStore(pool,encryption,new BaseSepoliaWalletControlVerifier(rpc));
+  assert.equal((await disabledStore.pendingRequests()).some(item=>item.requestId===request.id),false);
+  await assert.rejects(disabledStore.acceptRequest(request.id,'operator-eoa-only',async()=> 'a'.repeat(64)),/disabled/);
   valid=false; await assert.rejects(new PostgresSettlementStore(pool,encryption,verifier).acceptRequest(request.id,'operator-1271',async()=> 'a'.repeat(64)),/no longer valid/);
   const state=await pool.query<{verification_status:string}>('SELECT verification_status FROM destination_wallet_proofs WHERE intent_id=$1',[challenge.intentId]);
   assert.equal(state.rows[0].verification_status,'RECHECK_FAILED');

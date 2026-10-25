@@ -97,7 +97,8 @@ export class PostgresSettlementStore {
     const result = await this.pool.query<{ request_id: string; created_at: Date; expires_at: Date; immutable_terms: typeof PUBLIC_ROUTE_TERMS; method: 'EIP712_EOA'|'ERC1271' }>(
       `SELECT r.request_id,r.created_at,r.expires_at,r.immutable_terms,p.method FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id
        JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id AND p.verification_status='VERIFIED'
-       WHERE r.status='AWAITING_OPERATOR' AND r.destination_binding_version=2 AND d.status='CONFIRMED' AND r.expires_at > $1 ORDER BY r.created_at`, [new Date(now)]);
+       WHERE r.status='AWAITING_OPERATOR' AND r.destination_binding_version=2 AND d.status='CONFIRMED' AND r.expires_at > $1
+         AND ($2::boolean OR p.method='EIP712_EOA') ORDER BY r.created_at`, [new Date(now), Boolean(this.walletVerifier?.policy.allowContractWallets)]);
     return result.rows.map(row => ({ requestId: row.request_id, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(), destinationBinding: 'encrypted-owner-scoped-v2', walletControlVerification: row.method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa', terms: row.immutable_terms }));
   }
 
@@ -118,6 +119,7 @@ export class PostgresSettlementStore {
       if (!request) throw new Error('Public request not found');
       if (request.status !== 'AWAITING_OPERATOR') throw new Error('Public request has already been accepted or closed');
       if (request.destination_binding_version !== 2 || !request.owner_user_id || !request.intent_id || !request.encrypted_intent || !request.consent_digest || !request.recipient_fingerprint || request.intent_status !== 'CONFIRMED' || !request.proof_method || !request.proof_digest || !request.encrypted_proof || !request.challenge_id) throw new Error('Request destination binding has no valid required wallet-control proof');
+      this.assertProofMethodAllowed(request.proof_method);
       if (request.expires_at.getTime() <= now) {
         await client.query(`UPDATE public_order_requests SET status='EXPIRED', updated_at=$2 WHERE request_id=$1`, [requestId, new Date(now)]);
         throw new Error('Public request has expired');
@@ -553,6 +555,7 @@ export class PostgresSettlementStore {
     if (!request.consent_digest.equals(digestDestinationIntent(payload)) || !request.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))) throw new Error('Accepted order consent or recipient fingerprint does not match');
     if (!request.manifest_fingerprint.equals(destinationManifestFingerprint(order.immutable_manifest))) throw new Error('Accepted order manifest fingerprint does not match');
     const expectedVerification = request.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa';
+    this.assertProofMethodAllowed(request.proof_method);
     if (request.proof_status !== 'VERIFIED' || manifest.destinationIntent.intentId !== request.intent_id || manifest.destinationIntent.ownerFingerprint !== ownerHash(request.owner_user_id).toString('hex') || manifest.destinationIntent.consentDigest !== request.consent_digest.toString('hex') || manifest.destinationIntent.walletControlVerification !== expectedVerification || manifest.destinationIntent.proofDigest !== request.proof_digest.toString('hex')) throw new Error('Accepted order manifest destination metadata does not match');
     if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order route terms do not match the immutable destination request');
     validateOperatorOrderBinding(manifest, now);
@@ -565,6 +568,7 @@ export class PostgresSettlementStore {
       FROM destination_intents d JOIN public_order_requests r ON r.request_id=d.request_id JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id WHERE d.request_id=$1`, [order.order_id]);
     const record = result.rows[0];
     if (!record || record.status !== 'BOUND' || manifest.version !== 2 || !manifest.destinationIntent) throw new Error('Payout destination has no immutable owner binding');
+    this.assertProofMethodAllowed(record.proof_method);
     const payload = this.encryption.decrypt<DestinationIntentPayload>(record.encrypted_intent, destinationIntentContext(record.intent_id)); assertDestinationPayload(payload);
     if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || payload.ownerId !== record.owner_user_id
       || !record.consent_digest.equals(digestDestinationIntent(payload)) || !record.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))
@@ -592,6 +596,11 @@ export class PostgresSettlementStore {
         await client.query('COMMIT');
       } catch(recordError){await client.query('ROLLBACK');throw recordError;} finally{client.release();}
       throw error;
+    }
+  }
+  private assertProofMethodAllowed(method: 'EIP712_EOA'|'ERC1271'): void {
+    if (method === 'ERC1271' && !this.walletVerifier?.policy.allowContractWallets) {
+      throw Object.assign(new Error('Contract-wallet execution is disabled for this release.'), { code: 'CONTRACT_WALLET_DISABLED' });
     }
   }
   private async verifyAuthorization(client: PoolClient, order: OrderRow, kind: AuthorizationKind, authorizationId: string, operatorId: string, verifier: AuthorizationVerifier, allowedStates: string[], now: number) {

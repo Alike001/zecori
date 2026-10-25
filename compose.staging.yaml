@@ -52,6 +52,7 @@ services:
       PUBLIC_ORIGIN: http://localhost:8787
       WEBAUTHN_RP_ID: localhost
       BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}
+      ZECATHON_ERC1271_ENABLED: "0"
       ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
     secrets: [db_password, encryption_keyring]
     ports:
@@ -84,6 +85,7 @@ services:
       NODE_ENV: staging
       ZECATHON_OPERATOR_ID: ${ZECATHON_OPERATOR_ID:?Set a staging operator ID}
       BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-https://sepolia.base.org}
+      ZECATHON_ERC1271_ENABLED: "0"
       ZECATHON_OPERATOR_KEY: /run/secrets/operator_hmac
       ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
       ZECATHON_RELAY_ENCRYPTION_KEY_FILE: /run/secrets/relay_encryption_keyring

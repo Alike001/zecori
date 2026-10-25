@@ -1,5 +1,9 @@
 FROM node:24.14.0-bookworm-slim AS build
+ARG VCS_REF
+LABEL org.opencontainers.image.revision=$VCS_REF \
+      org.opencontainers.image.title="Zecathon cross-chain app"
 WORKDIR /app
+RUN printf '%s' "$VCS_REF" | grep -Eq '^[0-9a-f]{40}$' || { echo 'VCS_REF must be the exact 40-character Git revision' >&2; exit 1; }
 RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
@@ -7,6 +11,9 @@ COPY . .
 RUN pnpm build && pnpm prune --prod
 
 FROM node:24.14.0-bookworm-slim AS runtime
+ARG VCS_REF
+LABEL org.opencontainers.image.revision=$VCS_REF \
+      org.opencontainers.image.title="Zecathon cross-chain app"
 ENV NODE_ENV=production
 WORKDIR /app
 RUN groupadd --system --gid 10001 zecathon && useradd --system --uid 10001 --gid zecathon --home-dir /app zecathon
