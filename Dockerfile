@@ -33,6 +33,7 @@ RUN find dist server src scripts -type d -exec chmod 0555 {} + \
  && find dist server src scripts -type f -exec chmod 0444 {} + \
  && chmod 0444 package.json \
  && chmod 0555 /usr/local/bin/zecathon-entrypoint /usr/local/bin/zecathon-runtime-command
+USER 10001:10001
 EXPOSE 8787
 ENTRYPOINT ["zecathon-entrypoint"]
 CMD ["node", "--experimental-strip-types", "server/app-server.ts"]
