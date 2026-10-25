@@ -26,11 +26,12 @@ test('agent rejects injection, payout approval, secrets, and unsupported intents
 test('agent reads only the request supplied by the authorized session', () => {
   assert.match(respondToAgent('status please', { route }).text, /no authorized request/i);
   const privateReceiver = 'utest1privatepaymentreceiver';
-  const request = { id: 'request-1', status: 'AWAITING_OPERATOR', createdAt: '', expiresAt: '', destinationRecipient: `0x${'5'.repeat(40)}`, paymentInstructions: { receiver: privateReceiver, expiresAt: '' }, terms: route } as const;
+  const privateDestination = `0x${'5'.repeat(40)}`;
+  const request = { id: 'request-1', status: 'AWAITING_OPERATOR', createdAt: '', expiresAt: '', destinationBinding: { status: 'confirmed', walletControlVerification: 'verified-eoa' }, paymentInstructions: { receiver: privateReceiver, expiresAt: '' }, terms: route } as const;
   const result = respondToAgent('status please', { route, request });
   assert.deepEqual(result.proposedAction, { capability: 'read_order_status', requestId: 'request-1' });
   assert.ok(!result.text.includes(privateReceiver));
-  assert.ok(!result.text.includes(request.destinationRecipient));
+  assert.ok(!result.text.includes(privateDestination));
 });
 
 test('voice cannot treat spoken consent as payment authorization while disabled', () => {

@@ -1,0 +1,7 @@
+Here is the registered route:
+
+| Route ID | Kind | Source | Destination |
+| --- | --- | --- | --- |
+| **zcash-testnet-to-base-sepolia-fixed** | fixed-test-terms | **0.01 TAZ** on Zcash testnet | **1 test USDC** on Base Sepolia (Chain ID: **84532**) |
+
+Pricing: **1 TAZ = 100 test USDC**. These are fixed test terms, not a live market quote.
