@@ -1,4 +1,4 @@
-FROM node:24.14.0-bookworm-slim AS build
+FROM node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS build
 ARG VCS_REF
 LABEL org.opencontainers.image.revision=$VCS_REF \
       org.opencontainers.image.title="Zecathon cross-chain app"
@@ -10,12 +10,16 @@ RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build && pnpm prune --prod
 
-FROM node:24.14.0-bookworm-slim AS runtime
+FROM node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS runtime
 ARG VCS_REF
 LABEL org.opencontainers.image.revision=$VCS_REF \
       org.opencontainers.image.title="Zecathon cross-chain app"
 ENV NODE_ENV=production
 WORKDIR /app
+RUN apt-get update \
+ && apt-get upgrade -y \
+ && rm -rf /var/lib/apt/lists/* /usr/local/lib/node_modules/npm /opt/yarn-v* \
+ && rm -f /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/pnpm /usr/local/bin/pnpx /usr/local/bin/yarn /usr/local/bin/yarnpkg
 RUN groupadd --system --gid 10001 zecathon && useradd --system --uid 10001 --gid zecathon --home-dir /app zecathon
 COPY --from=build --chown=zecathon:zecathon /app/node_modules ./node_modules
 COPY --from=build --chown=zecathon:zecathon /app/dist ./dist
