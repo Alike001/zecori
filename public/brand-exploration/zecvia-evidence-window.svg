@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Zecvia provisional Evidence Window mark</title><desc id="desc">Two open frames contrast a private source window and a verified evidence window.</desc>
+  <defs><linearGradient id="veil" x1="0" x2="1"><stop stop-color="#141a1e"/><stop offset="1" stop-color="#f4f0e8"/></linearGradient></defs>
+  <rect width="320" height="240" rx="24" fill="#080b10"/><path d="M72 65h72v78H72z" fill="none" stroke="url(#veil)" stroke-width="12"/><path d="M176 65h72v78h-72V99" fill="none" stroke="#72d8e8" stroke-width="12"/>
+  <circle cx="160" cy="104" r="11" fill="#f4b728"/><path d="M144 104h5m22 0h5" stroke="#f4f0e8" stroke-width="4"/>
+  <text x="160" y="216" text-anchor="middle" fill="#f4f0e8" font-family="system-ui,sans-serif" font-size="20" font-weight="700">ZECVIA</text>
+</svg>

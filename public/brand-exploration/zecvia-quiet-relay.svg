@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Zecvia provisional Quiet Relay mark</title><desc id="desc">Two offset evidence nodes joined by a precise diagonal handoff.</desc>
+  <rect width="320" height="240" rx="24" fill="#080b10"/><circle cx="116" cy="132" r="49" fill="none" stroke="#4d5860"/><path d="M116 83a49 49 0 0 0 0 98z" fill="#f4b728"/>
+  <circle cx="204" cy="88" r="49" fill="none" stroke="#4d5860"/><path d="M204 39a49 49 0 0 1 0 98z" fill="#72d8e8"/>
+  <path d="M116 132 204 88" stroke="#f4f0e8" stroke-width="7" stroke-linecap="round"/><circle cx="116" cy="132" r="6" fill="#f4f0e8"/><circle cx="204" cy="88" r="6" fill="#f4f0e8"/>
+  <text x="160" y="216" text-anchor="middle" fill="#f4f0e8" font-family="system-ui,sans-serif" font-size="20" font-weight="700">ZECVIA</text>
+</svg>
