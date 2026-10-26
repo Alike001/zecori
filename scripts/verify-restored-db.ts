@@ -21,8 +21,8 @@ async function decryptRows(name: string, query: string, context: (row: Record<st
 
 try {
   const migrations = await pool.query<{ version: string }>('SELECT version FROM schema_migrations ORDER BY version');
-  const expectedMigrations = ['001_production_foundation','002_settlement_integration','003_private_verification_relay','004_crash_safe_address_allocation','005_passkey_identity','006_staging_keyring_canary','007_owner_destination_binding','008_destination_wallet_control'];
-  if (migrations.rows.map(row => row.version).join(',') !== expectedMigrations.join(',')) throw new Error('Restored database migration inventory does not exactly match the reviewed 001-008 sequence');
+  const expectedMigrations = ['001_production_foundation','002_settlement_integration','003_private_verification_relay','004_crash_safe_address_allocation','005_passkey_identity','006_staging_keyring_canary','007_owner_destination_binding','008_destination_wallet_control','009_privy_identity'];
+  if (migrations.rows.map(row => row.version).join(',') !== expectedMigrations.join(',')) throw new Error('Restored database migration inventory does not exactly match the reviewed 001-009 sequence');
   const canary = await pool.query<KeyringCanaryRow>('SELECT encrypted_canary,encryption_key_version,plaintext_digest FROM staging_keyring_canary WHERE singleton=true');
   verifyKeyringCanary(canary.rows[0], orderEncryption, 'Restored'); decrypted += 1; encryptedRecords.canary = 1;
   await decryptRows('publicRequestReceivers', 'SELECT request_id,encrypted_payment_receiver FROM public_order_requests', row => `request:${row.request_id}:receiver`, 'encrypted_payment_receiver');
@@ -36,9 +36,10 @@ try {
   await decryptRows('destinationIntents', 'SELECT intent_id,encrypted_intent FROM destination_intents', row => `destination-intent:${row.intent_id}`, 'encrypted_intent');
   await decryptRows('walletChallenges', 'SELECT challenge_id,encrypted_challenge FROM destination_wallet_challenges', row => `wallet-control:${row.challenge_id}:challenge`, 'encrypted_challenge');
   await decryptRows('walletProofs', 'SELECT challenge_id,encrypted_proof FROM destination_wallet_proofs', row => `wallet-control:${row.challenge_id}:proof`, 'encrypted_proof');
-  const integrity = await pool.query<{ audit_events: string; identity_events: string; destination_intent_events:string; destination_wallet_events:string; sessions: string; credentials: string; users:string; requests:string; destination_intents:string; wallet_challenges:string; wallet_proofs:string; failed_wallet_proofs:string; orders: string; unresolved_orders: string; replay_references: string; authorizations: string; relay_jobs: string; relay_messages: string; receipts: string }>(`SELECT
+  const integrity = await pool.query<{ audit_events: string; identity_events: string; external_identities: string; destination_intent_events:string; destination_wallet_events:string; sessions: string; credentials: string; users:string; requests:string; destination_intents:string; wallet_challenges:string; wallet_proofs:string; failed_wallet_proofs:string; orders: string; unresolved_orders: string; replay_references: string; authorizations: string; relay_jobs: string; relay_messages: string; receipts: string }>(`SELECT
     (SELECT count(*) FROM audit_events) audit_events,
     (SELECT count(*) FROM identity_audit_events) identity_events,
+    (SELECT count(*) FROM external_identities) external_identities,
     (SELECT count(*) FROM destination_intent_events) destination_intent_events,
     (SELECT count(*) FROM destination_wallet_audit_events) destination_wallet_events,
     (SELECT count(*) FROM user_sessions) sessions,

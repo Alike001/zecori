@@ -34,7 +34,7 @@ check('versioned-independent-keyrings', provisioner.includes('encryption-keyring
 check('dedicated-backup-credential', provisioner.includes('backup-passphrase') && backup.includes('BACKUP_PASSPHRASE_FILE') && !backup.includes("gpg --symmetric --cipher-algo AES256 --output"));
 check('backup-and-archive-checksums', backup.includes('SHA256SUMS') && backup.includes('$output.sha256') && restore.includes('sha256sum -c'));
 check('backup-source-canary-preflight', backup.includes('zecathon-runtime-command') && backup.includes('verify-backup-source.ts') && !backup.includes('staging-keyring-check.ts'));
-check('backup-restore-covers-migrations-001-008', backup.includes('migrations.txt') && restore.includes('verify-restored-db.ts') && (await readFile('scripts/verify-backup-source.ts','utf8')).includes('008_destination_wallet_control') && (await readFile('scripts/verify-restored-db.ts','utf8')).includes('walletProofs'));
+check('backup-restore-covers-migrations-001-009', backup.includes('migrations.txt') && restore.includes('verify-restored-db.ts') && (await readFile('scripts/verify-backup-source.ts','utf8')).includes('009_privy_identity') && (await readFile('scripts/verify-restored-db.ts','utf8')).includes('external_identities'));
 check('restore-restart-inventory', restore.includes('docker restart "$container"') && restore.includes('before_restart') && restore.includes('after_restart') && restore.includes('compare-recovery-inventory.ts'));
 const config = spawnSync('docker', ['compose', '-f', 'compose.staging.yaml', 'config', '--quiet'], { encoding: 'utf8', env: {
   ...process.env, STAGING_SECRETS_DIR: '/tmp/zecathon-preflight-secrets',

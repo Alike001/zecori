@@ -44,6 +44,17 @@ export interface UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined): boolean;
 }
 
+export async function issueUserSession(client: { query: Pool['query'] }, userId: string, prior?: string) {
+  if (validToken(prior)) {
+    await client.query(`WITH revoked AS (UPDATE user_sessions SET revoked_at=now() WHERE session_hash=$1 AND revoked_at IS NULL RETURNING user_id)
+      INSERT INTO identity_audit_events(user_id,event_type,details) SELECT user_id,'SESSION_ROTATED','{}'::jsonb FROM revoked`, [hash(prior)]);
+  }
+  const sessionToken = randomBytes(32).toString('hex'); const csrfToken = randomBytes(32).toString('hex');
+  await client.query(`INSERT INTO user_sessions(session_hash,user_id,csrf_hash,created_at,last_seen_at,expires_at)
+    VALUES($1,$2,$3,now(),now(),now()+interval '7 days')`, [hash(sessionToken), userId, hash(csrfToken)]);
+  return { sessionToken, csrfToken, maxAge: Math.floor(SESSION_TTL_MS / 1000) };
+}
+
 type PasskeyVerification = {
   registration: typeof verifyRegistrationResponse;
   authentication: typeof verifyAuthenticationResponse;
@@ -137,7 +148,7 @@ export class PostgresPasskeyAuth implements UserIdentityService {
       if (first) await client.query(`UPDATE users SET status='ACTIVE',activated_at=now() WHERE user_id=$1`, [challenge.user_id]);
       await client.query(`INSERT INTO identity_audit_events(user_id,event_type,credential_fingerprint,details)
         VALUES($1,$2,$3,$4)`, [challenge.user_id, first ? 'ACCOUNT_REGISTERED' : 'PASSKEY_ADDED', fingerprint(info.credential.id), { userVerified: info.userVerified, deviceType: info.credentialDeviceType, backedUp: info.credentialBackedUp }]);
-      const issued = await this.rotateSession(client, challenge.user_id, current?.sessionToken);
+      const issued = await issueUserSession(client, challenge.user_id, current?.sessionToken);
       await client.query('COMMIT');
       return { session: issued, userId: challenge.user_id };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -170,7 +181,7 @@ export class PostgresPasskeyAuth implements UserIdentityService {
       if (updated.rowCount !== 1) throw new Error('Passkey counter changed concurrently');
       await client.query(`INSERT INTO identity_audit_events(user_id,event_type,credential_fingerprint,details)
         VALUES($1,'LOGIN_SUCCEEDED',$2,$3)`, [row.user_id, fingerprint(row.credential_id), { userVerified: true }]);
-      const issued = await this.rotateSession(client, row.user_id, current?.sessionToken);
+      const issued = await issueUserSession(client, row.user_id, current?.sessionToken);
       await client.query('COMMIT');
       return { session: issued, userId: row.user_id };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -195,17 +206,6 @@ export class PostgresPasskeyAuth implements UserIdentityService {
       RETURNING challenge_id,ceremony,challenge,user_id`, [id, ceremony]);
     if (!result.rows[0]) throw new Error('Passkey challenge is expired, already used, or invalid');
     return result.rows[0];
-  }
-
-  private async rotateSession(client: { query: Pool['query'] }, userId: string, prior?: string) {
-    if (validToken(prior)) {
-      await client.query(`WITH revoked AS (UPDATE user_sessions SET revoked_at=now() WHERE session_hash=$1 AND revoked_at IS NULL RETURNING user_id)
-        INSERT INTO identity_audit_events(user_id,event_type,details) SELECT user_id,'SESSION_ROTATED','{}'::jsonb FROM revoked`, [hash(prior)]);
-    }
-    const sessionToken = randomBytes(32).toString('hex'); const csrfToken = randomBytes(32).toString('hex');
-    await client.query(`INSERT INTO user_sessions(session_hash,user_id,csrf_hash,created_at,last_seen_at,expires_at)
-      VALUES($1,$2,$3,now(),now(),now()+interval '7 days')`, [hash(sessionToken), userId, hash(csrfToken)]);
-    return { sessionToken, csrfToken, maxAge: Math.floor(SESSION_TTL_MS / 1000) };
   }
 
   private label(value: unknown, field: string): string {

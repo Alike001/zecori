@@ -15,6 +15,7 @@ export type AgentModelTurn = {
   toolCalls: AgentModelToolCall[];
   replay: AgentModelInput[];
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  rateLimits?: { limitRequests?: string; remainingRequests?: string; limitTokens?: string; remainingTokens?: string; resetRequests?: string; resetTokens?: string };
 };
 export type AgentModelRequest = {
   instructions: string;
@@ -57,10 +58,10 @@ type ResponsesProviderOptions = {
 
 class ResponsesProvider implements AgentModelProvider {
   readonly id: string;
-  private readonly apiKey: string;
+  protected readonly apiKey: string;
   private readonly model: string;
-  private readonly baseUrl: string;
-  private readonly fetcher: typeof fetch;
+  protected readonly baseUrl: string;
+  protected readonly fetcher: typeof fetch;
   private readonly maxOutputTokens: number;
   private readonly includeStoreFalse: boolean;
   constructor(
@@ -97,12 +98,22 @@ class ResponsesProvider implements AgentModelProvider {
       max_output_tokens: this.maxOutputTokens,
     };
     if (this.includeStoreFalse) body.store = false;
-    const response = await this.fetcher(`${this.baseUrl.replace(/\/$/, '')}/responses`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(20_000),
+    const performRequest = () => this.fetcher(`${this.baseUrl.replace(/\/$/, '')}/responses`, {
+      method: 'POST', headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000),
     });
+    let response: Response;
+    try {
+      response = await performRequest();
+      if (this.id === 'groq-responses' && (response.status === 429 || response.status >= 500)) {
+        const retryAfter = Number(response.headers.get('retry-after') ?? 0);
+        await new Promise(resolve => setTimeout(resolve, Math.min(Number.isFinite(retryAfter) ? retryAfter * 1_000 : 100, 250)));
+        response = await performRequest();
+      }
+    } catch (error) {
+      if (this.id !== 'groq-responses') throw error;
+      try { response = await performRequest(); }
+      catch (retryError) { throw new AgentProviderError(retryError instanceof DOMException && retryError.name === 'TimeoutError' ? 'Model provider timed out.' : 'Model provider request failed.', 503); }
+    }
     if (!response.ok) {
       const retryAfter = response.status === 429 ? Number(response.headers.get('retry-after')) : undefined;
       throw new AgentProviderError(
@@ -138,6 +149,14 @@ class ResponsesProvider implements AgentModelProvider {
     const validUsage = usage && [usage.input_tokens, usage.output_tokens, usage.total_tokens].every(item => Number.isSafeInteger(item) && Number(item) >= 0)
       ? { inputTokens: Number(usage.input_tokens), outputTokens: Number(usage.output_tokens), totalTokens: Number(usage.total_tokens) }
       : undefined;
+    const rateLimits = {
+      ...(response.headers.get('x-ratelimit-limit-requests') ? { limitRequests: response.headers.get('x-ratelimit-limit-requests')! } : {}),
+      ...(response.headers.get('x-ratelimit-remaining-requests') ? { remainingRequests: response.headers.get('x-ratelimit-remaining-requests')! } : {}),
+      ...(response.headers.get('x-ratelimit-limit-tokens') ? { limitTokens: response.headers.get('x-ratelimit-limit-tokens')! } : {}),
+      ...(response.headers.get('x-ratelimit-remaining-tokens') ? { remainingTokens: response.headers.get('x-ratelimit-remaining-tokens')! } : {}),
+      ...(response.headers.get('x-ratelimit-reset-requests') ? { resetRequests: response.headers.get('x-ratelimit-reset-requests')! } : {}),
+      ...(response.headers.get('x-ratelimit-reset-tokens') ? { resetTokens: response.headers.get('x-ratelimit-reset-tokens')! } : {}),
+    };
     return {
       responseId: value.id,
       ...(response.headers.get('x-request-id') ? { providerRequestId: response.headers.get('x-request-id')! } : {}),
@@ -145,6 +164,7 @@ class ResponsesProvider implements AgentModelProvider {
       toolCalls,
       replay: (value.output as Array<Record<string, unknown>>).map(item => ({ type: 'provider_item', value: item })),
       ...(validUsage ? { usage: validUsage } : {}),
+      ...(Object.keys(rateLimits).length ? { rateLimits } : {}),
     };
   }
 }
@@ -158,6 +178,15 @@ export class OpenAIResponsesProvider extends ResponsesProvider {
 export class GroqResponsesProvider extends ResponsesProvider {
   constructor(apiKey: string, model = 'openai/gpt-oss-20b', baseUrl = 'https://api.groq.com/openai/v1', fetcher: typeof fetch = fetch, maxOutputTokens = 600) {
     super({ id: 'groq-responses', includeStoreFalse: false }, apiKey, model, baseUrl, fetcher, maxOutputTokens);
+  }
+
+  async listAvailableModels(): Promise<string[]> {
+    const response = await this.fetcher(`${this.baseUrl.replace(/\/$/, '')}/models`, { headers: { authorization: `Bearer ${this.apiKey}` }, signal: AbortSignal.timeout(20_000) });
+    if (!response.ok) throw new AgentProviderError(`Model inventory returned HTTP ${response.status}.`, response.status, undefined, response.headers.get('x-request-id') ?? undefined);
+    const raw = await response.text(); if (raw.length > 262_144) throw new Error('Model inventory exceeds the configured boundary.');
+    let value: unknown; try { value = JSON.parse(raw); } catch { throw new Error('Model inventory returned malformed JSON.'); }
+    if (!value || typeof value !== 'object' || !('data' in value) || !Array.isArray(value.data)) throw new Error('Model inventory returned an invalid response.');
+    return value.data.map(item => item && typeof item === 'object' && 'id' in item && typeof item.id === 'string' ? item.id : '').filter(Boolean).sort();
   }
 }
 

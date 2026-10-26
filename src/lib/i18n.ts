@@ -14,6 +14,10 @@ const messages = {
     transactionPending: 'Transaction verification is pending.',
     receiptDescription: 'A verified receipt is available after independent destination verification.',
     recoveryGuidance: 'Do not resend funds. Check the request status or contact support.',
+    fixedTermsWarning: 'Only 0.01 TAZ → 1 test USDC is supported. This is not a live quote.',
+    noAuthorityWarning: 'Voice and AI cannot sign, pay, approve a payout, or create a funded order.',
+    docsLanguageNotice: 'Documentation is currently authored in English. French and Arabic security copy still requires human review.',
+    voiceTextFallback: 'Voice output is unavailable for this language. Continue with text.',
   },
   fr: {
     heroTitle: 'Privé à l’entrée.',
@@ -27,6 +31,10 @@ const messages = {
     transactionPending: 'La vérification de la transaction est en attente.',
     receiptDescription: 'Un reçu vérifié est disponible après une vérification indépendante de la destination.',
     recoveryGuidance: 'Ne renvoyez pas de fonds. Vérifiez l’état de la demande ou contactez l’assistance.',
+    fixedTermsWarning: 'Seul 0.01 TAZ → 1 test USDC est pris en charge. Il ne s’agit pas d’un cours en direct.',
+    noAuthorityWarning: 'La voix et l’IA ne peuvent ni signer, ni payer, ni approuver un versement, ni créer une demande financée.',
+    docsLanguageNotice: 'La documentation est actuellement rédigée en anglais. Les avertissements de sécurité en français et en arabe nécessitent encore une révision humaine.',
+    voiceTextFallback: 'La sortie vocale n’est pas disponible dans cette langue. Continuez avec le texte.',
   },
   ar: {
     heroTitle: 'خصوصية عند الإرسال.',
@@ -40,6 +48,10 @@ const messages = {
     transactionPending: 'التحقق من المعاملة قيد الانتظار.',
     receiptDescription: 'يتوفر إيصال موثّق بعد التحقق المستقل من الوجهة.',
     recoveryGuidance: 'لا ترسل الأموال مرة أخرى. تحقّق من حالة الطلب أو تواصل مع الدعم.',
+    fixedTermsWarning: 'المتاح فقط هو 0.01 TAZ → 1 test USDC. هذا ليس سعراً مباشراً.',
+    noAuthorityWarning: 'لا يمكن للصوت أو الذكاء الاصطناعي التوقيع أو الدفع أو الموافقة على صرف أو إنشاء طلب ممول.',
+    docsLanguageNotice: 'الوثائق مكتوبة بالإنجليزية حالياً. ما زالت نصوص الأمان الفرنسية والعربية بحاجة إلى مراجعة بشرية.',
+    voiceTextFallback: 'الإخراج الصوتي غير متاح لهذه اللغة. تابع باستخدام النص.',
   },
 } as const;
 

@@ -8,8 +8,8 @@ import { normalizeEvmAddress } from '../src/lib/evm-address.ts';
 import { baseSepoliaRpcUrl } from './base-sepolia-verifier.ts';
 
 export const WALLET_CONTROL_CHAIN_ID = 84532 as const;
-export const WALLET_CONTROL_PURPOSE = 'Verify control of this Base Sepolia destination for one Zecathon destination intent. This does not authorize payment, payout, or any transaction.' as const;
-export const WALLET_CONTROL_DOMAIN = Object.freeze({ name: 'Zecathon Destination Control', version: '1', chainId: WALLET_CONTROL_CHAIN_ID });
+export const WALLET_CONTROL_PURPOSE = 'Verify control of this Base Sepolia destination for one Zecori destination intent. This does not authorize payment, payout, or any transaction.' as const;
+export const WALLET_CONTROL_DOMAIN = Object.freeze({ name: 'Zecori Destination Control', version: '1', chainId: WALLET_CONTROL_CHAIN_ID });
 export const WALLET_CONTROL_TYPES = Object.freeze({
   DestinationControl: [
     { name: 'owner', type: 'bytes32' }, { name: 'session', type: 'bytes32' },

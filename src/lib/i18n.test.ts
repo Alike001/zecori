@@ -19,3 +19,14 @@ test('every supported backend lifecycle state has an explicit UI label in every 
   const statuses=['AWAITING_OPERATOR','ACCEPTED','PAYMENT_READY','SOURCE_DETECTED','SOURCE_CONFIRMED','PAYOUT_AWAITING_APPROVAL','PAYOUT_SUBMITTED','COMPLETED','FAILED','REFUND_PENDING','REFUNDED','UNRESOLVED','EXPIRED','CANCELLED'];
   for(const locale of ['en','fr','ar'] as const) for(const status of statuses) assert.notEqual(translateOrderStatus(locale,status),status,`${locale} ${status}`);
 });
+
+test('security-critical locale strings preserve financial tokens and disclose incomplete review', () => {
+  for (const locale of ['en','fr','ar'] as const) {
+    assert.match(translate(locale, 'fixedTermsWarning'), /0\.01 TAZ → 1 test USDC/);
+    assert.match(translate(locale, 'docsLanguageNotice'), /review|révision|مراجعة/i);
+    assert.ok(translate(locale, 'noAuthorityWarning').length > 30);
+  }
+  assert.equal(localeMetadata.en.translationReview, 'human-validated');
+  assert.notEqual(localeMetadata.fr.translationReview, 'human-validated');
+  assert.notEqual(localeMetadata.ar.translationReview, 'human-validated');
+});

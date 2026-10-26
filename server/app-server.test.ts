@@ -1,5 +1,6 @@
 import test, { type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,6 +8,8 @@ import { createApplicationServer } from './app-server.ts';
 import { MemoryPublicOrderRequestStore } from './public-order-store.ts';
 import type { AuthenticatedUser, UserIdentityService } from './user-auth.ts';
 import { fixedWalletReadinessIntent } from './wallet-intent.ts';
+import type { PrivyIdentityService } from './privy-auth.ts';
+import { SPEECH_LIMITS, type SpeechProvider } from './speech-provider.ts';
 
 const recipient = `0x${'3'.repeat(40)}`;
 const tokenA = 'a'.repeat(64); const tokenB = 'b'.repeat(64); const csrfA = 'c'.repeat(64); const csrfB = 'd'.repeat(64);
@@ -31,7 +34,7 @@ class TestIdentity implements UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined) { return provided === session.csrfToken; }
 }
 
-async function fixture(t: TestContext, maximum = 20, agentMaximum = 10) {
+async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider) {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-server-'));
   await mkdir(join(folder, 'assets'));
   await writeFile(join(folder, 'index.html'), '<!doctype html><main>zecathon-production</main>');
@@ -40,6 +43,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10) {
   const server = createApplicationServer({
     store, auth: new TestIdentity(), publicOrigin: 'http://127.0.0.1:8787',
     staticDirectory: folder, rateLimit: { windowMs: 60_000, maximum }, agentRateLimit: { windowMs: 60_000, maximum: agentMaximum },
+    ...(privy ? { privy, privyAppId: 'public-test-app-id' } : {}), ...(speech ? { speech, speechStatus: speech.status } : {}),
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise<void>(resolve => server.close(() => resolve())));
@@ -49,7 +53,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10) {
 
 test('standalone server provides health checks, static assets, and SPA deep links', async t => {
   const { base } = await fixture(t);
-  assert.equal((await fetch(`${base}/health/live`)).status, 200);
+  const live = await fetch(`${base}/health/live`); assert.equal(live.status, 200); assert.match(live.headers.get('permissions-policy') ?? '', /microphone=\(self\)/);
   assert.equal((await fetch(`${base}/health/ready`)).status, 200);
   assert.match(await (await fetch(`${base}/history/example`)).text(), /zecathon-production/);
   assert.match(await (await fetch(`${base}/assets/app.js`)).text(), /loaded/);
@@ -80,6 +84,42 @@ test('guest exploration stays public while private order creation requires a pas
   for (const action of ['approve-payout', 'derive-address', 'broadcast', 'wallet-rpc']) {
     assert.equal((await fetch(`${base}/api/v1/orders/example/${action}`, { method: 'POST', headers: { cookie: cookieA, origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', 'x-csrf-token': csrfToken }, body: '{}' })).status, 404);
   }
+});
+
+test('Privy stays disabled by default and enabled login/link preserve origin, CSRF, and explicit-link boundaries', async t => {
+  const disabled = await fixture(t);
+  const disabledCapabilities = await (await fetch(`${disabled.base}/api/v1/capabilities`)).json() as { authentication: { privy: { enabled: boolean } }; routes: Array<{ availability: string; execution: { enabled: boolean } }>; productCapabilities: Array<{ id: string; status: string; summary: string }> };
+  assert.equal(disabledCapabilities.authentication.privy.enabled, false);
+  assert.equal(disabledCapabilities.routes.filter(route => route.execution.enabled).length, 1);
+  assert.ok(disabledCapabilities.routes.every(route => ['verified-executable','experimental-disabled','research-only'].includes(route.availability)));
+  assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'privy-auth')?.status, 'DISABLED');
+  assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'live-quotes')?.status, 'DISABLED');
+  assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'inbox')?.status, 'PLANNED');
+  assert.ok(disabledCapabilities.productCapabilities.filter(item => ['DISABLED','PLANNED'].includes(item.status)).every(item => !/available now|shipped/i.test(item.summary)));
+
+  const calls: string[] = [];
+  const privy: PrivyIdentityService = {
+    enabled: true,
+    async login(token, current) {
+      calls.push(`login:${token}:${current?.userId ?? 'guest'}`);
+      if (current) throw Object.assign(new Error('explicit linking required'), { statusCode: 409, code: 'EXPLICIT_LINK_REQUIRED' });
+      return { session: { sessionToken: 'e'.repeat(64), csrfToken: 'f'.repeat(64), maxAge: 60 }, userId: randomUUID(), created: false };
+    },
+    async link(token, current) { calls.push(`link:${token}:${current.userId}`); return { linked: true, alreadyLinked: false }; },
+  };
+  const { base, cookieA } = await fixture(t, 20, 10, privy);
+  const capabilities = await (await fetch(`${base}/api/v1/capabilities`)).json() as { authentication: { privy: Record<string, unknown> } };
+  assert.deepEqual(capabilities.authentication.privy, { enabled: true, appId: 'public-test-app-id', loginMethods: ['email','google'], embeddedWalletCreation: false, delegatedActions: false, serverSigning: false });
+
+  const headers = { origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', authorization: 'Bearer token-a' };
+  const login = await fetch(`${base}/api/v1/auth/privy/login`, { method: 'POST', headers, body: '{}' });
+  assert.equal(login.status, 200); assert.match(login.headers.get('set-cookie') ?? '', /zecathon_session=/);
+  assert.ok(!(await login.text()).includes('token-a'));
+  assert.equal((await fetch(`${base}/api/v1/auth/privy/login`, { method: 'POST', headers: { ...headers, cookie: cookieA }, body: '{}' })).status, 409);
+  assert.equal((await fetch(`${base}/api/v1/auth/privy/link`, { method: 'POST', headers: { ...headers, cookie: cookieA }, body: '{}' })).status, 403);
+  const linked = await fetch(`${base}/api/v1/auth/privy/link`, { method: 'POST', headers: { ...headers, cookie: cookieA, 'x-csrf-token': csrfA }, body: '{}' });
+  assert.equal(linked.status, 200);
+  assert.deepEqual(calls, ['login:token-a:guest', 'login:token-a:11111111-1111-4111-8111-111111111111', 'link:token-a:11111111-1111-4111-8111-111111111111']);
 });
 
 test('wallet intent rejects invalid recipients, unsupported networks, and premature payment attempts', async t => {
@@ -133,4 +173,30 @@ test('agent endpoint has a tighter independent request rate limit', async t => {
   const request = () => fetch(`${base}/api/v1/agent/messages`, { method: 'POST', headers: { origin: 'http://127.0.0.1:8787', 'content-type': 'application/json' }, body: JSON.stringify({ message: 'What route is supported?', locale: 'en' }) });
   assert.equal((await request()).status, 200); assert.equal((await request()).status, 200);
   const limited = await request(); assert.equal(limited.status, 429); assert.match(await limited.text(), /AGENT_RATE_LIMITED/);
+});
+
+test('voice endpoints require account, CSRF, consent, valid duration and supported output language, then clean audio memory', async t => {
+  let captured: Uint8Array | undefined; const calls: string[] = [];
+  const speech: SpeechProvider = {
+    status: { enabled: true, provider: 'groq', externalRequestsApproved: true, liveValidated: false, transcription: { model: 'whisper-large-v3-turbo', locales: ['en','fr','ar'], providerDocumentationVerified: true }, synthesis: { locales: ['en','ar'], models: { en: 'canopylabs/orpheus-v1-english', ar: 'canopylabs/orpheus-arabic-saudi' }, providerDocumentationVerified: true }, limits: SPEECH_LIMITS, retention: 'memory-only-until-provider-response' },
+    async transcribe(audio, type, locale) { captured = audio; calls.push(`transcribe:${type}:${locale}`); return 'Prepare 0.01 TAZ for 1 test USDC'; },
+    async synthesize(text, locale) { calls.push(`speak:${locale}:${text}`); return new Uint8Array([82,73,70,70]); },
+  };
+  const { base, cookieA, store } = await fixture(t, 30, 20, undefined, speech);
+  const publicCapabilities = await (await fetch(`${base}/api/v1/capabilities`)).json() as { voice: { enabled: boolean; liveValidated: boolean } };
+  assert.deepEqual(publicCapabilities.voice, { ...speech.status });
+  const audioHeaders = { origin: 'http://127.0.0.1:8787', 'content-type': 'audio/webm', 'x-speech-locale': 'en', 'x-audio-duration-ms': '1200', 'x-voice-consent': 'audio-processing-and-retention-accepted' };
+  assert.equal((await fetch(`${base}/api/v1/voice/transcriptions`, { method: 'POST', headers: audioHeaders, body: new Uint8Array([7,8,9]) })).status, 401);
+  assert.equal((await fetch(`${base}/api/v1/voice/transcriptions`, { method: 'POST', headers: { ...audioHeaders, cookie: cookieA }, body: new Uint8Array([7,8,9]) })).status, 403);
+  const noConsent = { ...audioHeaders, cookie: cookieA, 'x-csrf-token': csrfA }; delete (noConsent as Partial<typeof noConsent>)['x-voice-consent'];
+  assert.equal((await fetch(`${base}/api/v1/voice/transcriptions`, { method: 'POST', headers: noConsent, body: new Uint8Array([7,8,9]) })).status, 403);
+  const tooShort = await fetch(`${base}/api/v1/voice/transcriptions`, { method: 'POST', headers: { ...audioHeaders, cookie: cookieA, 'x-csrf-token': csrfA, 'x-audio-duration-ms': '100' }, body: new Uint8Array([7]) });
+  assert.equal(tooShort.status, 422); assert.match(await tooShort.text(), /AUDIO_TOO_SHORT/);
+  const transcript = await fetch(`${base}/api/v1/voice/transcriptions`, { method: 'POST', headers: { ...audioHeaders, cookie: cookieA, 'x-csrf-token': csrfA }, body: new Uint8Array([7,8,9]) });
+  assert.equal(transcript.status, 200); assert.match(await transcript.text(), /canAuthorizePayment.*false/); assert.deepEqual([...captured!], [0,0,0], 'audio memory must be cleared after provider response');
+  const french = await fetch(`${base}/api/v1/voice/speech`, { method: 'POST', headers: { origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', cookie: cookieA, 'x-csrf-token': csrfA, 'x-voice-consent': 'audio-processing-and-retention-accepted' }, body: JSON.stringify({ text: 'Bonjour', locale: 'fr' }) });
+  assert.equal(french.status, 422); assert.match(await french.text(), /VOICE_OUTPUT_UNSUPPORTED_LANGUAGE/);
+  const spoken = await fetch(`${base}/api/v1/voice/speech`, { method: 'POST', headers: { origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', cookie: cookieA, 'x-csrf-token': csrfA, 'x-voice-consent': 'audio-processing-and-retention-accepted' }, body: JSON.stringify({ text: 'Review only.', locale: 'en' }) });
+  assert.equal(spoken.status, 200); assert.equal(spoken.headers.get('content-type'), 'audio/wav'); assert.deepEqual(calls, ['transcribe:audio/webm:en', 'speak:en:Review only.']);
+  assert.equal((await store.list('11111111-1111-4111-8111-111111111111')).length, 0, 'voice must not create an order');
 });

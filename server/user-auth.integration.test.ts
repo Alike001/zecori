@@ -8,6 +8,7 @@ import { PostgresPasskeyAuth } from './user-auth.ts';
 import { PostgresPublicOrderRequestStore } from './public-order-store.ts';
 import { DataEncryption } from './data-encryption.ts';
 import { fixedWalletReadinessIntent } from './wallet-intent.ts';
+import { PostgresPrivyIdentity } from './privy-auth.ts';
 
 const databaseUrl = process.env.POSTGRES_TEST_URL;
 function request(sessionToken: string, csrfToken: string): IncomingMessage {
@@ -58,4 +59,34 @@ test('TEST-ONLY passkey registration, second credential, cross-session login, re
 
   await auth.logout(newSession!);
   assert.equal(await auth.session(request(authenticated.session.sessionToken, authenticated.session.csrfToken)), undefined);
+});
+
+test('TEST-ONLY Privy subjects map to stable isolated UUID accounts and require explicit conflict-free linking', { skip: !databaseUrl }, async t => {
+  const pool = createPostgresPool(databaseUrl); await migrateDatabase(pool); t.after(() => pool.end());
+  const subjects: Record<string, string> = { 'token-a': 'did:privy:test-a', 'token-b': 'did:privy:test-b', 'token-c': 'did:privy:test-c' };
+  const privy = new PostgresPrivyIdentity(pool, { appId: 'test-app', verificationKey: 'unused-test-key' }, async token => ({
+    app_id: 'test-app', issuer: 'privy.io', issued_at: 1, expiration: 4_102_444_800, session_id: randomUUID(), user_id: subjects[token] ?? '',
+  }));
+  const created = await privy.login('token-a');
+  const repeated = await privy.login('token-a');
+  assert.equal(repeated.userId, created.userId);
+  assert.equal(repeated.created, false);
+
+  const passkeyOwner = randomUUID();
+  await pool.query(`INSERT INTO users(user_id,display_name,status,activated_at) VALUES($1,'TEST-ONLY linked account','ACTIVE',now())`, [passkeyOwner]);
+  const current = { userId: passkeyOwner, displayName: 'TEST-ONLY linked account', csrfToken: 'c'.repeat(64), passkeyCount: 1, sessionToken: 'd'.repeat(64) };
+  assert.deepEqual(await privy.link('token-b', current), { linked: true, alreadyLinked: false });
+  assert.deepEqual(await privy.link('token-b', current), { linked: true, alreadyLinked: true });
+  assert.equal((await privy.login('token-b')).userId, passkeyOwner);
+  await assert.rejects(privy.link('token-a', current), /another account/);
+  await assert.rejects(privy.link('token-c', current), /different Privy identity/);
+
+  const orders = new PostgresPublicOrderRequestStore(pool, new DataEncryption({ activeVersion: 1, keys: new Map([[1, randomBytes(32)]]) }));
+  const order = await orders.create(passkeyOwner, fixedWalletReadinessIntent(`0x${randomBytes(20).toString('hex')}`));
+  const afterLogin = await privy.login('token-b');
+  assert.equal((await orders.list(afterLogin.userId))[0].id, order.id);
+  assert.equal((await orders.list(created.userId)).length, 0);
+  const stored = await pool.query<{ subject_fingerprint: Buffer }>('SELECT subject_fingerprint FROM external_identities WHERE user_id=$1', [passkeyOwner]);
+  assert.equal(stored.rows[0].subject_fingerprint.length, 32);
+  assert.ok(!stored.rows[0].subject_fingerprint.toString('utf8').includes('did:privy'));
 });

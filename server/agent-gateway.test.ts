@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createAgentGateway } from './agent-gateway.ts';
 import { executeAgentTool } from './agent-tools.ts';
-import { OpenAIResponsesProvider, loadAgentProvider, type AgentModelProvider, type AgentModelRequest, type AgentModelTurn } from './agent-provider.ts';
+import { AgentProviderError, OpenAIResponsesProvider, loadAgentProvider, type AgentModelProvider, type AgentModelRequest, type AgentModelTurn } from './agent-provider.ts';
 import { MemoryPublicOrderRequestStore, PUBLIC_ROUTE_TERMS, type PublicOrderRequest, type PublicOrderRequestStore } from './public-order-store.ts';
 import type { FinalReceipt, ShareableReceipt } from '../src/lib/receipt.ts';
 import { BASE_USDC } from '../src/lib/order-coordinator.ts';
@@ -54,6 +54,18 @@ test('missing credentials keeps the gateway clearly limited', async () => {
   assert.equal(reply.mode, 'limited'); assert.equal(reply.providerCalls, 0); assert.match(reply.text, /Limited mode/i); assert.match(reply.text, /not a live market quote/i);
 });
 
+test('limited mode prepares non-authorizing reviews and returns only owner-scoped status cards in every supported locale', async () => {
+  const gateway = createAgentGateway(); const store = new ScopedStore();
+  const review = await gateway.respond('Préparer un aperçu', { store }, 'fr');
+  assert.deepEqual(review.toolsUsed, ['prepare_swap_request']); assert.equal(review.factCards?.[0]?.kind, 'review-preparation'); assert.match(review.text, /aucune demande/i);
+  const status = await gateway.respond(`ما حالة الطلب ${requestId}`, { store, userId: ownerA }, 'ar');
+  assert.deepEqual(status.toolsUsed, ['get_order_status']); assert.equal(status.factCards?.[0]?.kind, 'order-status'); assert.match(status.text, /حالة الخادم/);
+  const other = await gateway.respond(`status ${requestId}`, { store, userId: ownerB }, 'en');
+  assert.equal(other.refusal, true); assert.equal(other.failureCode, 'tool-authorization'); assert.equal(other.factCards, undefined);
+  const wrongAmount = await gateway.respond('Prepare 0.02 TAZ for 2 USDC', { store }, 'en');
+  assert.equal(wrongAmount.refusal, true); assert.equal(wrongAmount.providerCalls, 0); assert.match(wrongAmount.text, /Unsupported amount/);
+});
+
 test('credentials remain inert until the separate chargeable-request opt-in is exact', async t => {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-ai-config-')); t.after(() => import('node:fs/promises').then(fs => fs.rm(folder, { recursive: true, force: true })));
   const keyFile = join(folder, 'project-api-key'); await writeFile(keyFile, 'synthetic-test-credential-value'); await chmod(keyFile, 0o600);
@@ -76,14 +88,13 @@ test('model responses are grounded through registered tools', async () => {
   assert.equal(provider.calls[1].input[1].type, 'provider_item');
   assert.match((provider.calls[1].input[2] as { output: string }).output, /fixed-test-terms/);
   assert.equal(reply.providerCalls, 2);
-  assert.equal(reply.factCards?.[0].routeId, 'zcash-testnet-to-base-sepolia-fixed');
-  assert.deepEqual(reply.factCards?.[0].source, { network: 'zcash-testnet', asset: 'TAZ', amount: '0.01', amountZatoshis: '1000000', pool: 'ironwood' });
-  assert.deepEqual(reply.factCards?.[0].destination, { network: 'base-sepolia', chainId: 84532, asset: 'USDC', amount: '1', amountAtomic: '1000000', contract: BASE_USDC });
-  assert.deepEqual(reply.factCards?.[0].provider, { id: 'zecathon-testnet-lp-01', model: 'trusted-liquidity-provider' });
-  assert.equal(reply.factCards?.[0].pricing.description, 'Experimental fixed test rate: 1 TAZ = 100 test USDC; this is not a live market quote.');
-  assert.deepEqual(reply.factCards?.[0].disclosures, { testOnly: true, liveMarketQuote: false, spendingAuthority: false, createsOrder: false, authorizesPayment: false });
-  assert.equal(reply.factCards?.[0].destination.chainId, 84532);
-  assert.equal(reply.factCards?.[0].destination.contract, BASE_USDC);
+  const routeCard = reply.factCards?.find(card => card.kind === 'route-explanation'); assert.ok(routeCard);
+  assert.equal(routeCard.routeId, 'zcash-testnet-to-base-sepolia-fixed');
+  assert.deepEqual(routeCard.source, { network: 'zcash-testnet', asset: 'TAZ', amount: '0.01', amountZatoshis: '1000000', pool: 'ironwood' });
+  assert.deepEqual(routeCard.destination, { network: 'base-sepolia', chainId: 84532, asset: 'USDC', amount: '1', amountAtomic: '1000000', contract: BASE_USDC });
+  assert.deepEqual(routeCard.provider, { id: 'zecathon-testnet-lp-01', model: 'trusted-liquidity-provider' });
+  assert.equal(routeCard.pricing.description, 'Experimental fixed test rate: 1 TAZ = 100 test USDC; this is not a live market quote.');
+  assert.deepEqual(routeCard.disclosures, { testOnly: true, liveMarketQuote: false, spendingAuthority: false, createsOrder: false, authorizesPayment: false });
 });
 
 test('correct fixed pricing does not reproduce the live validator true-versus-undefined refusal', async () => {
@@ -111,8 +122,9 @@ test('sanitized Groq table response is accepted while backend facts supply omitt
   const reply = await createAgentGateway(provider).respond('Retrieve the actual public supported route.', { store: new ScopedStore() });
   assert.equal(reply.refusal, undefined);
   assert.equal(reply.failureCode, undefined);
-  assert.equal(reply.factCards?.[0].routeId, 'zcash-testnet-to-base-sepolia-fixed');
-  assert.deepEqual(reply.factCards?.[0].disclosures, { testOnly: true, liveMarketQuote: false, spendingAuthority: false, createsOrder: false, authorizesPayment: false });
+  const routeCard = reply.factCards?.find(card => card.kind === 'route-explanation'); assert.ok(routeCard);
+  assert.equal(routeCard.routeId, 'zcash-testnet-to-base-sepolia-fixed');
+  assert.deepEqual(routeCard.disclosures, { testOnly: true, liveMarketQuote: false, spendingAuthority: false, createsOrder: false, authorizesPayment: false });
 });
 
 test('model narrative may omit structured route fields without weakening the verified fact card', async () => {
@@ -122,10 +134,11 @@ test('model narrative may omit structured route fields without weakening the ver
   ]);
   const reply = await createAgentGateway(provider).respond('Show the supported route.', { store: new ScopedStore() });
   assert.equal(reply.refusal, undefined);
-  assert.equal(reply.factCards?.[0].routeId, 'zcash-testnet-to-base-sepolia-fixed');
-  assert.equal(reply.factCards?.[0].destination.chainId, 84532);
-  assert.equal(reply.factCards?.[0].provider.id, 'zecathon-testnet-lp-01');
-  assert.equal(reply.factCards?.[0].disclosures.spendingAuthority, false);
+  const routeCard = reply.factCards?.find(card => card.kind === 'route-explanation'); assert.ok(routeCard);
+  assert.equal(routeCard.routeId, 'zcash-testnet-to-base-sepolia-fixed');
+  assert.equal(routeCard.destination.chainId, 84532);
+  assert.equal(routeCard.provider.id, 'zecathon-testnet-lp-01');
+  assert.equal(routeCard.disclosures.spendingAuthority, false);
 });
 
 test('structured route facts must exactly match the deterministic registry', () => {
@@ -220,6 +233,24 @@ test('swap preparation cannot create or authorize a transaction', async () => {
   assert.equal(preview.createsOrder, false); assert.equal(preview.authorizesPayment, false); assert.equal(store.createCalls, 0);
 });
 
+test('agent tool results produce typed non-authorizing cards without cross-account data', async () => {
+  const provider = new SequenceProvider([
+    { responseId: 'one', toolCalls: [
+      { callId: 'quote', name: 'compare_verified_quotes', arguments: {} },
+      { callId: 'review', name: 'prepare_swap_request', arguments: {} },
+      { callId: 'status', name: 'get_order_status', arguments: { requestId } },
+      { callId: 'recovery', name: 'explain_transaction_failure', arguments: { requestId } },
+    ] },
+    { responseId: 'two', text: 'The verified application cards show the fixed test review and authorized backend status. No action was taken.', toolCalls: [] },
+  ]);
+  const reply = await createAgentGateway(provider).respond('Review my authorized request and explain recovery.', { store: new ScopedStore(), userId: ownerA });
+  assert.deepEqual(reply.factCards?.map(card => card.kind), ['quote-comparison', 'review-preparation', 'order-status', 'failure-recovery']);
+  const serialized = JSON.stringify(reply.factCards);
+  assert.doesNotMatch(serialized, /utest1|secret evidence|private operator note|0x5555/);
+  assert.match(serialized, /"createsOrder":false/);
+  assert.match(serialized, /"authorizesPayment":false/);
+});
+
 test('financial user tasks return genuine bounded tool data', async () => {
   const store = new ScopedStore();
   assert.match(JSON.stringify(await executeAgentTool('explain_shielded_privacy', {}, { store })), /Ironwood/);
@@ -242,6 +273,15 @@ test('provider failures return a bounded unavailable state', async () => {
   const provider = new SequenceProvider([]);
   const reply = await createAgentGateway(provider).respond('Explain shielded privacy.', { store: new ScopedStore() });
   assert.equal(reply.refusal, true); assert.equal(reply.providerCalls, 1); assert.match(reply.text, /temporarily unavailable|invalid response/i);
+});
+
+test('provider rate limits and timeouts return retry-safe classifications without taking action', async () => {
+  const rateProvider: AgentModelProvider = { id: 'test-rate', async createTurn() { throw new AgentProviderError('bounded', 429, 4); } };
+  const rate = await createAgentGateway(rateProvider).respond('Which route is supported?', { store: new ScopedStore() });
+  assert.equal(rate.failureCode, 'provider-rate-limit'); assert.equal(rate.retryAfterSeconds, 4); assert.equal(rate.providerCalls, 1); assert.match(rate.text, /No action was taken/i);
+  const timeoutProvider: AgentModelProvider = { id: 'test-timeout', async createTurn() { throw new AgentProviderError('Model provider timed out.', 503); } };
+  const timeout = await createAgentGateway(timeoutProvider).respond('Which route is supported?', { store: new ScopedStore() });
+  assert.equal(timeout.failureCode, 'provider-timeout'); assert.equal(timeout.providerCalls, 1); assert.match(timeout.text, /timed out/i);
 });
 
 test('provider adapter uses bounded stateless Responses calls and rejects invalid output', async () => {

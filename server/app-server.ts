@@ -13,6 +13,8 @@ import { createAgentGateway, type AgentGateway } from './agent-gateway.ts';
 import { loadAgentProvider } from './agent-provider.ts';
 import { PostgresDestinationWalletControl, UnavailableDestinationWalletControl, type DestinationWalletControlService } from './destination-wallet-control-store.ts';
 import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from './wallet-control.ts';
+import { PostgresPrivyIdentity, type PrivyIdentityService } from './privy-auth.ts';
+import { loadSpeechProvider, type SpeechProvider, type SpeechStatus } from './speech-provider.ts';
 
 export type ApplicationServerOptions = {
   store: PublicOrderRequestStore;
@@ -24,8 +26,12 @@ export type ApplicationServerOptions = {
   rateLimit?: { windowMs: number; maximum: number };
   agentRateLimit?: { windowMs: number; maximum: number };
   agent?: AgentGateway;
+  speech?: SpeechProvider;
+  speechStatus?: SpeechStatus;
   walletControl?: DestinationWalletControlService;
   contractWalletsEnabled?: boolean;
+  privy?: PrivyIdentityService;
+  privyAppId?: string;
 };
 
 const MIME: Record<string, string> = {
@@ -55,10 +61,13 @@ function clientKey(request: IncomingMessage, trustProxy: boolean): string {
   return request.socket.remoteAddress ?? 'unknown';
 }
 
-function securityHeaders(response: ServerResponse): void {
-  response.setHeader('content-security-policy', "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'");
+function securityHeaders(response: ServerResponse, privyEnabled: boolean): void {
+  const policy = privyEnabled
+    ? "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://auth.privy.io; font-src 'self' data:; child-src https://auth.privy.io; frame-src https://auth.privy.io https://challenges.cloudflare.com; connect-src 'self' https://auth.privy.io; worker-src 'self'; manifest-src 'self'"
+    : "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'";
+  response.setHeader('content-security-policy', policy);
   response.setHeader('referrer-policy', 'no-referrer');
-  response.setHeader('permissions-policy', 'camera=(), geolocation=(), microphone=()');
+  response.setHeader('permissions-policy', 'camera=(), geolocation=(), microphone=(self)');
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('x-frame-options', 'DENY');
 }
@@ -87,9 +96,9 @@ export function createApplicationServer(options: ApplicationServerOptions) {
   const limiter = new RateLimiter(options.rateLimit?.windowMs ?? 60_000, options.rateLimit?.maximum ?? 60);
   const agentLimiter = new RateLimiter(options.agentRateLimit?.windowMs ?? 60_000, options.agentRateLimit?.maximum ?? 10);
   const walletControl = options.walletControl ?? new UnavailableDestinationWalletControl();
-  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled) });
+  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), ...(options.speech ? { speech: options.speech } : {}), ...(options.speechStatus ? { speechStatus: options.speechStatus } : {}), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled), ...(options.privy ? { privy: options.privy, privyAppId: options.privyAppId } : {}) });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
-    securityHeaders(response);
+    securityHeaders(response, Boolean(options.privy));
     const url = new URL(request.url ?? '/', 'http://internal');
     if (url.pathname === '/health/live') return json(response, 200, { status: 'live' });
     if (url.pathname === '/health/ready') {
@@ -102,7 +111,7 @@ export function createApplicationServer(options: ApplicationServerOptions) {
     response.setHeader('ratelimit-reset', String(Math.ceil(limit.reset / 1000)));
     if (!limit.allowed) return json(response, 429, { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } });
     if (options.requireProxyHttps && request.headers['x-forwarded-proto'] !== 'https') return json(response, 400, { error: { code: 'HTTPS_REQUIRED', message: 'HTTPS is required.' } });
-    if (url.pathname === '/api/v1/agent/messages') {
+    if (url.pathname === '/api/v1/agent/messages' || url.pathname.startsWith('/api/v1/voice/')) {
       const agentLimit = agentLimiter.accept(`agent:${clientKey(request, Boolean(options.trustProxy))}`);
       response.setHeader('x-agent-ratelimit-limit', String(options.agentRateLimit?.maximum ?? 10));
       response.setHeader('x-agent-ratelimit-remaining', String(agentLimit.remaining));
@@ -134,14 +143,27 @@ async function start(): Promise<void> {
   if (rpId.includes('://') || rpId.includes('/') || !(parsedOrigin.hostname === rpId || parsedOrigin.hostname.endsWith(`.${rpId}`))) throw new Error('WEBAUTHN_RP_ID must equal the public hostname or be its registrable parent domain');
   const pool = createPostgresPool();
   const encryption = await loadEncryptionKeyring();
-  const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecathon Private Routes', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
+  const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecori', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
+  const privyFlag = process.env.PRIVY_AUTH_ENABLED ?? '0';
+  if (!['0', '1'].includes(privyFlag)) throw new Error('PRIVY_AUTH_ENABLED must be exactly 0 or 1');
+  let privy: PostgresPrivyIdentity | undefined;
+  let privyAppId: string | undefined;
+  if (privyFlag === '1') {
+    privyAppId = process.env.PRIVY_APP_ID?.trim();
+    const verificationKeyFile = process.env.PRIVY_VERIFICATION_KEY_FILE?.trim();
+    if (!privyAppId || !verificationKeyFile) throw new Error('Enabled Privy authentication requires PRIVY_APP_ID and PRIVY_VERIFICATION_KEY_FILE');
+    const verificationKey = (await readFile(verificationKeyFile, 'utf8')).trim();
+    if (!verificationKey) throw new Error('Privy verification key file is empty');
+    privy = new PostgresPrivyIdentity(pool, { appId: privyAppId, verificationKey });
+  }
   const agentProvider = await loadAgentProvider();
+  const speech = await loadSpeechProvider();
   const walletPolicy = contractWalletPolicy(process.env.ZECATHON_ERC1271_ENABLED);
   const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL, walletPolicy);
   if (!walletVerifier) throw new Error('BASE_SEPOLIA_RPC_URL is required for destination wallet verification');
   const agentRequestsPerMinute = Number(process.env.AI_AGENT_REQUESTS_PER_MINUTE ?? '10');
   if (!Number.isSafeInteger(agentRequestsPerMinute) || agentRequestsPerMinute < 1 || agentRequestsPerMinute > 60) throw new Error('AI_AGENT_REQUESTS_PER_MINUTE must be an integer from 1 to 60.');
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1' });
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), ...(speech.provider ? { speech: speech.provider } : {}), speechStatus: speech.status, agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1', ...(privy ? { privy, privyAppId } : {}) });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

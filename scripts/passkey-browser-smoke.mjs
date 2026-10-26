@@ -38,7 +38,7 @@ try {
   const authenticatorOptions = { protocol: 'ctap2', transport: 'internal', hasResidentKey: true, hasUserVerification: true, isUserVerified: true, automaticPresenceSimulation: true };
   const { authenticatorId: firstAuthenticatorId } = await send('WebAuthn.addVirtualAuthenticator', { options: authenticatorOptions }, sessionId);
   await send('Page.enable', {}, sessionId); await send('Runtime.enable', {}, sessionId);
-  await send('Page.navigate', { url: origin }, sessionId);
+  await send('Page.navigate', { url: new URL('/swap', origin).href }, sessionId);
 
   const evaluate = async expression => {
     const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
