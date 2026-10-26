@@ -16,6 +16,10 @@ const auth = {
   async beginAuthentication() { throw new Error('not available in guest smoke'); }, async finishAuthentication() { throw new Error('not available in guest smoke'); },
   async logout() {}, verifyCsrf(session, value) { return value===session.csrfToken; },
 };
+const speech = {
+  status: { enabled:true,provider:'groq',externalRequestsApproved:true,liveValidated:false,transcription:{model:'whisper-large-v3-turbo',locales:['en','fr','ar'],providerDocumentationVerified:true},synthesis:{locales:['en','ar'],models:{en:'canopylabs/orpheus-v1-english',ar:'canopylabs/orpheus-arabic-saudi'},providerDocumentationVerified:true},limits:{maximumAudioBytes:2000000,maximumDurationMs:30000,minimumDurationMs:500,maximumSpeechCharacters:200},retention:'memory-only-until-provider-response' },
+  async transcribe() { return 'Prepare 0.02 TAZ for 2 USDC'; }, async synthesize() { return new Uint8Array([82,73,70,70]); },
+};
 
 const reservation = createPortReservation();
 await new Promise(resolveListen => reservation.listen(0, '127.0.0.1', resolveListen));
@@ -24,7 +28,7 @@ if (!reservedAddress || typeof reservedAddress === 'string') throw new Error('Br
 const port = reservedAddress.port;
 await new Promise(resolveClose => reservation.close(resolveClose));
 const origin = `http://127.0.0.1:${port}`;
-const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, publicOrigin: origin, staticDirectory: resolve('dist') });
+const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, speech, speechStatus:speech.status, publicOrigin: origin, staticDirectory: resolve('dist') });
 await new Promise(resolveListen => server.listen(port, '127.0.0.1', resolveListen));
 const profile = await mkdtemp(join(tmpdir(), 'zecathon-06a-browser-'));
 const chrome = spawn(process.env.CHROME_BIN ?? 'google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -49,7 +53,38 @@ try {
   const waitFor = async (expression, description) => { for (let attempt = 0; attempt < 100; attempt += 1) { if (await evaluate(expression)) return; await new Promise(resolveWait => setTimeout(resolveWait, 100)); } const state = await evaluate(`({href:location.href,ready:document.readyState,text:document.body?.innerText?.slice(0,800),html:document.documentElement?.outerHTML?.slice(0,500)})`); throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(state)}`); };
   const click = text => evaluate(`(() => { const item=[...document.querySelectorAll('button')].find(node=>node.textContent.includes(${JSON.stringify(text)})); if(!item)return false; item.click(); return true; })()`);
 
-  await waitFor(`document.body?.innerText.includes('FIXED TEST ROUTE')===true`, 'public fixed-route explorer');
+  await waitFor(`document.body?.innerText.includes('Your Zcash.')===true`, 'public product homepage');
+  const landing = await evaluate(`({text:document.body.innerText,width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,menu:document.querySelector('.menu-toggle')!==null,brand:document.querySelector('.brand-name')?.textContent,mark:document.querySelector('.zecori-mark')?.getAttribute('aria-label')})`);
+  for (const disclosure of ['one experimental testnet route','0.01 taz','1 test usdc','research only','do not send funds','shielded in. transparent out.','experimental trusted lp']) if (!landing.text.toLowerCase().includes(disclosure)) throw new Error(`Landing disclosure is missing: ${disclosure}`);
+  if (!landing.menu) throw new Error('Mobile navigation control is missing');
+  if (landing.brand !== 'Zecori' || !landing.mark?.includes('private-origin')) throw new Error(`Zecori wordmark or route mark is missing: ${JSON.stringify(landing)}`);
+  if (landing.width > landing.viewport) throw new Error(`Landing layout overflows: ${landing.width} > ${landing.viewport}`);
+  const accessibility = await evaluate(`(() => { const ids=[...document.querySelectorAll('[id]')].map(node=>node.id); const unnamed=[...document.querySelectorAll('button')].filter(node=>!(node.textContent||node.getAttribute('aria-label')||node.getAttribute('title'))); return {main:document.querySelectorAll('main').length,h1:document.querySelectorAll('h1').length,skip:Boolean(document.querySelector('.skip-link')),duplicateIds:ids.filter((id,index)=>ids.indexOf(id)!==index),unnamedButtons:unnamed.length}; })()`);
+  if (accessibility.main !== 1 || accessibility.h1 !== 1 || !accessibility.skip || accessibility.duplicateIds.length || accessibility.unnamedButtons) throw new Error(`Landing accessibility semantics failed: ${JSON.stringify(accessibility)}`);
+  await send('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] }, sessionId);
+  const reducedMotion = await evaluate(`getComputedStyle(document.documentElement).scrollBehavior==='auto'`);
+  if (!reducedMotion) throw new Error('Reduced-motion preference does not disable smooth scrolling');
+  await send('Emulation.setEmulatedMedia', { features: [] }, sessionId);
+  const themeBefore = await evaluate(`document.documentElement.dataset.theme`);
+  await evaluate(`document.querySelector('.theme-toggle').click()`);
+  const themeAfter = await evaluate(`({theme:document.documentElement.dataset.theme,saved:localStorage.getItem('zecori-theme')})`);
+  if (themeAfter.theme === themeBefore || themeAfter.saved !== themeAfter.theme) throw new Error(`Theme preference did not toggle and persist: ${JSON.stringify({themeBefore,themeAfter})}`);
+
+  await send('Page.navigate', { url: `${origin}/docs/getting-started` }, sessionId);
+  await waitFor(`location.pathname==='/docs/getting-started' && document.querySelector('.docs-content h1')?.textContent==='Getting started'`, 'navigable documentation');
+  const docs = await evaluate(`({text:document.body.innerText,current:document.querySelector('.docs-sidebar a[aria-current="page"]')?.textContent,width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth})`);
+  if (docs.current?.trim() !== 'Getting started' || docs.width > docs.viewport) throw new Error(`Documentation navigation/layout failed: ${JSON.stringify(docs)}`);
+  for (const claim of ['VERIFIED','EXPERIMENTAL','Only 0.01 TAZ → 1 test USDC is executable.']) if (!docs.text.includes(claim)) throw new Error(`Documentation truth marker is missing: ${claim}`);
+  await send('Emulation.setLocaleOverride', { locale: 'ar-EG' }, sessionId); await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(navigator,'language',{configurable:true,get:()=> 'ar-EG'});` }, sessionId); await send('Page.navigate', { url: `${origin}/docs/ai-and-voice` }, sessionId);
+  await waitFor(`document.querySelector('.docs-page')?.getAttribute('dir')==='rtl' && document.body.innerText.includes('مراجعة بشرية')`, 'Arabic RTL documentation disclosure');
+  const arabicLayout = await evaluate(`({width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,matrix:document.body.innerText.includes('Saudi Arabic · untested live')})`);
+  if (arabicLayout.width > arabicLayout.viewport || !arabicLayout.matrix) throw new Error(`Arabic RTL documentation failed: ${JSON.stringify(arabicLayout)}`);
+  await send('Emulation.setLocaleOverride', { locale: 'fr-FR' }, sessionId); await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(navigator,'language',{configurable:true,get:()=> 'fr-FR'});` }, sessionId); await send('Page.reload', {}, sessionId);
+  await waitFor(`document.querySelector('.docs-page')?.getAttribute('dir')==='ltr' && document.body.innerText.includes('révision humaine')`, 'French documentation disclosure');
+  await send('Emulation.setLocaleOverride', { locale: 'en-US' }, sessionId); await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(navigator,'language',{configurable:true,get:()=> 'en-US'});` }, sessionId);
+  await send('Page.navigate', { url: origin }, sessionId); await waitFor(`document.body?.innerText.includes('Your Zcash.')===true`, 'homepage after docs');
+  if (!await click('Explore the supported route')) throw new Error('Primary route CTA is missing');
+  await waitFor(`location.pathname==='/swap' && document.body?.innerText.includes('FIXED TEST ROUTE')===true`, 'public fixed-route explorer');
   const initial = await evaluate(`({text:document.body.innerText,width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,requestDisabled:document.querySelector('.request-gate button')?.disabled})`);
   if (!initial.text.includes('Sign in only when you are ready to request.')) throw new Error('Passkey boundary is missing');
   if (!initial.text.includes('Destination is unverified until you sign')) throw new Error('Destination-control disclosure is missing');
@@ -82,7 +117,19 @@ try {
   if (conflict !== 409) throw new Error(`Conflicting destination update returned ${conflict}`);
   const premature = await evaluate(`fetch('/api/v1/orders/'+${JSON.stringify(createdA.body.request.id)}+'/publish-instructions',{method:'POST',headers:{origin:location.origin,'content-type':'application/json','x-csrf-token':'${csrfA}'},body:'{}'}).then(r=>r.status)`);
   if (premature !== 404) throw new Error(`Premature payment action returned ${premature}`);
-  process.stdout.write(`${JSON.stringify({ status: 'MILESTONE_06D_BROWSER_SMOKE_PASSED', guestExploration: true, passkeyBoundary: true, walletCapabilityChecks: true, custodyAndPrivacyDisclosures: true, testnetAndFixedPriceDisclosures: true, unverifiedDestinationLabel: true, invalidRecipient: true, unsupportedNetwork: true, responsiveViewport: true, receiverWithheld: true, twoAccountIsolation: true, conflictingUpdateRejected: true, prematurePaymentRejected: true })}\n`);
+  await send('Page.navigate', { url: `${origin}/assistant` }, sessionId); await waitFor(`document.querySelector('.voice-consent')!==null`, 'authenticated voice consent');
+  await evaluate(`document.querySelector('.voice-consent input').click();navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError')}`);
+  if (!await click('Record up to 30s')) throw new Error('Voice recording control missing');
+  await waitFor(`document.body.innerText.includes('Microphone permission was refused')`, 'refused microphone fallback');
+  await evaluate(`navigator.mediaDevices.getUserMedia=async()=>({getTracks:()=>[{stop(){}}]});window.MediaRecorder=class{static isTypeSupported(){return true}constructor(){this.state='inactive';this.mimeType='audio/webm'}start(){this.state='recording'}stop(){this.state='inactive';this.ondataavailable?.({data:new Blob(['voice'],{type:'audio/webm'})});this.onstop?.()}}`);
+  if (!await click('Record up to 30s')) throw new Error('Voice retry control missing');
+  await new Promise(resolveWait=>setTimeout(resolveWait,650)); if (!await click('Stop recording')) throw new Error('Voice stop control missing');
+  await waitFor(`document.body.innerText.includes('The amount does not match the only supported terms')`, 'incorrect spoken amount review');
+  await evaluate(`(() => { const input=document.querySelector('.transcript-review textarea'); const setter=Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value').set; setter.call(input,'Prepare 0.01 TAZ for 1 test USDC'); input.dispatchEvent(new Event('input',{bubbles:true})); })()`);
+  await waitFor(`[...document.querySelectorAll('button')].some(item=>item.textContent.includes('Use reviewed text')&&!item.disabled)`, 'corrected transcript acceptance'); if (!await click('Use reviewed text')) throw new Error('Corrected transcript control missing');
+  const voiceReview = await evaluate(`({draft:document.querySelector('.agent-form input')?.value,submitted:[...document.querySelectorAll('.agent-prompt')].some(item=>item.textContent.includes('Prepare 0.01 TAZ'))})`);
+  if (voiceReview.draft !== 'Prepare 0.01 TAZ for 1 test USDC' || voiceReview.submitted) throw new Error(`Transcript review auto-submitted or changed text: ${JSON.stringify(voiceReview)}`);
+  process.stdout.write(`${JSON.stringify({ status: 'MILESTONE_08D_BROWSER_A11Y_BRAND_SMOKE_PASSED', guestExploration: true, zecoriBrand:true, themePersistence:true, docsNavigation: true, arabicRtl: true, frenchRendering: true, accessibilitySemantics: true, reducedMotion: true, voiceConsent:true, microphoneRefusalFallback:true, transcriptCorrection:true, incorrectVoiceAmountBlocked:true, voiceDoesNotAutoSubmit:true, passkeyBoundary: true, walletCapabilityChecks: true, custodyAndPrivacyDisclosures: true, testnetAndFixedPriceDisclosures: true, unverifiedDestinationLabel: true, invalidRecipient: true, unsupportedNetwork: true, responsiveViewport: true, receiverWithheld: true, twoAccountIsolation: true, conflictingUpdateRejected: true, prematurePaymentRejected: true })}\n`);
 } finally {
   socket?.close();
   if (chrome.exitCode === null) { chrome.kill('SIGTERM'); await new Promise(resolveExit => chrome.once('exit', resolveExit)); }

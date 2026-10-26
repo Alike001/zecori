@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-labelledby="title desc">
+  <title id="title">Zecori private-origin route mark</title>
+  <desc id="desc">A concealed circular origin divides into two visible destination evidence points.</desc>
+  <rect width="48" height="48" rx="10" fill="#10211b"/>
+  <circle cx="18" cy="24" r="10" fill="#c9ef4c" opacity=".18"/>
+  <path d="M18 14v20" fill="none" stroke="#c9ef4c" stroke-width="3" stroke-linecap="round"/>
+  <path d="M18 24h8c7.2 0 7.2-9 14-9M18 24h8c7.2 0 7.2 9 14 9" fill="none" stroke="#f2f7f4" stroke-width="3" stroke-linecap="round"/>
+  <path d="M40 11v8M36 15h8M40 29v8M36 33h8" fill="none" stroke="#63d7c1" stroke-width="2" stroke-linecap="round"/>
+</svg>

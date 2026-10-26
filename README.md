@@ -1,6 +1,8 @@
-# Zecathon Private Routes
+# Zecori
 
-An original, privacy-first application for one explicitly constrained cross-chain test route:
+**Your Zcash. More possibilities.**
+
+Zecori is an original, privacy-first application for one explicitly constrained cross-chain test route. The name is provisional; repository paths, package identifiers, environment-variable prefixes, and database names remain unchanged.
 
 - Source: exactly `0.01 TAZ` (`1,000,000` zatoshis) on Zcash testnet, Ironwood shielded.
 - Destination: exactly `1 test USDC` (`1,000,000` atomic units) on Base Sepolia (`84532`).
@@ -12,7 +14,13 @@ The application does not offer mainnet execution, automatic payouts, trustless s
 
 ## Current implementation
 
-The public application can inspect exact route terms and manually explore recipient addresses without login. Passkeys protect private history, tracking, and receipts. A financial request becomes operator-eligible only after an explicit EIP-712 or ERC-1271 destination-control proof; unverified destinations remain clearly labeled and blocked. Existing authenticated orders show genuine backend lifecycle state and reveal encrypted-at-rest payment instructions only after validated durable allocation.
+The responsive public homepage explains the product, route availability, custody and recovery boundaries without requiring login. Visitors can explore every declared route; only the exact `0.01 TAZ -> 1 test USDC` test route is executable. Passkeys protect private history, tracking, and receipts. A financial request becomes operator-eligible only after an explicit EIP-712 or ERC-1271 destination-control proof; unverified destinations remain clearly labeled and blocked. Existing authenticated orders show genuine backend lifecycle state and reveal encrypted-at-rest payment instructions only after validated durable allocation.
+
+Optional Google and email sign-in through Privy is feature-flagged and disabled by default. It verifies Privy access tokens on the server and maps their opaque subject to the existing internal UUID account model. It does not create embedded wallets, enable delegated actions, or change settlement ownership. Existing passkeys remain supported. See the [Milestone 08A review report](docs/milestone-08a-review-ready.md) for setup, acceptance steps, and current dependency-audit limitations.
+
+The product now includes a navigable documentation site at `/docs/getting-started`, a shared feature-truth matrix, product navigation for Routes, Account, Activity, and the advisory AI assistant, plus clearly disabled Inbox and Settings locations. See the [Milestone 08B review report](docs/milestone-08b-review-ready.md), [handle/contact design](docs/handles-and-contacts-plan.md), [notification design](docs/notifications-plan.md), and [AI route contract](docs/ai-route-integration-contract.md).
+
+Milestone 08C added deterministic multilingual route/review/status guidance, an authenticated opt-in Groq speech gateway with transcript correction and text fallback, `/docs/ai-and-voice`, an evidence-status roadmap, and an earlier Zecvia identity study retained as provenance. Milestone 08D provisionally adopts Zecori across the active product. See the [Milestone 08C review report](docs/milestone-08c-review-ready.md), [AI and voice boundaries](docs/ai-and-voice.md), [Zecori brand guidelines](docs/zecori-brand-guidelines.md), and [08D submission readiness](docs/milestone-08d-review-ready.md).
 
 The standalone Node server provides:
 
