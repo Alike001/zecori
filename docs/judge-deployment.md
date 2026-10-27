@@ -12,7 +12,7 @@ The standalone `compose.judge.yaml` assigns a distinct Compose project, database
 - A trusted Base Sepolia HTTPS RPC URL. No payout signer, Zcash wallet, wallet data, relay private key, or staging backup belongs on this host.
 - The exact reviewed 40-character `VCS_REF`.
 
-Keep `ZECATHON_ROUTE_REQUESTS_ENABLED=0` for the first deployment. Public exploration, authentication, handles, contacts, inbox, history, and recovery can be accepted in this mode. Set it to `1` only after an operator has freshly verified the provider, source/verifier availability, funding/recovery prerequisites, and the approval sequence in `first-linked-test-readiness.md`. This flag opens request creation only; it does not allocate an address, sign, broadcast, pay out, or prove settlement.
+Keep `ZECATHON_ROUTE_REQUESTS_ENABLED=0` and `ZECATHON_ROUTE_LIQUIDITY_READY=0` for the first deployment. Public exploration, authentication, handles, contacts, inbox, history, and recovery can be accepted in this mode. Opening requests requires all three independent gates: operator readiness set to `1`, liquidity readiness set to `1`, and a reviewed future UTC `ZECATHON_ROUTE_TERMS_VALID_UNTIL`. Expired terms close the route automatically. These gates open request creation only; they do not allocate an address, sign, broadcast, pay out, or prove settlement.
 
 ## Preflight and first start
 
@@ -24,6 +24,7 @@ export DOMAIN=judge.example.org
 export VCS_REF=<REVIEWED_40_HEX_SHA>
 export BASE_SEPOLIA_RPC_URL=https://operator-approved.example
 export ZECATHON_ROUTE_REQUESTS_ENABLED=0
+export ZECATHON_ROUTE_LIQUIDITY_READY=0
 
 docker compose -f compose.judge.yaml config --quiet
 docker compose -f compose.judge.yaml build

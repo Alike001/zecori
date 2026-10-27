@@ -34,7 +34,7 @@ class TestIdentity implements UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined) { return provided === session.csrfToken; }
 }
 
-async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeRequestsEnabled = true) {
+async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeState: boolean | { operatorAttested: boolean; liquidityReady: boolean; termsValidUntil?: string } = true) {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-server-'));
   await mkdir(join(folder, 'assets'));
   await writeFile(join(folder, 'index.html'), '<!doctype html><main>zecathon-production</main>');
@@ -42,7 +42,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: 
   const store = new MemoryPublicOrderRequestStore();
   const server = createApplicationServer({
     store, auth: new TestIdentity(), publicOrigin: 'http://127.0.0.1:8787',
-    routeRequestsEnabled,
+    routeReadiness: typeof routeState === 'boolean' ? (routeState ? { operatorAttested: true, liquidityReady: true, termsValidUntil: new Date(Date.now() + 60_000).toISOString() } : { operatorAttested: false, liquidityReady: false }) : routeState,
     staticDirectory: folder, rateLimit: { windowMs: 60_000, maximum }, agentRateLimit: { windowMs: 60_000, maximum: agentMaximum },
     ...(privy ? { privy, privyAppId: 'public-test-app-id' } : {}), ...(speech ? { speech, speechStatus: speech.status } : {}),
   });
@@ -93,7 +93,8 @@ test('route request creation fails closed without a current operator readiness a
   assert.deepEqual(capabilities.orderCreation, {
     enabled: false,
     state: 'operator-review-required',
-    reason: 'No current provider and signed testnet-path readiness attestation is configured. Exploration and existing history remain available.',
+    reason: 'Current operator readiness has not been attested.',
+    readiness: { enabled: false, operator: 'required', liquidity: 'missing', terms: 'unconfigured', reason: 'Current operator readiness has not been attested.' },
     binding: 'encrypted-owner-scoped-v2',
     walletControlVerification: 'required-eip712-eoa',
   });
@@ -103,6 +104,19 @@ test('route request creation fails closed without a current operator readiness a
   const response = await fetch(`${base}/api/v1/order-requests`, { method: 'POST', headers: { cookie: cookieA, origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', 'x-csrf-token': csrfA }, body: JSON.stringify(walletIntent) });
   assert.equal(response.status, 503);
   assert.match(await response.text(), /ROUTE_OPERATOR_REVIEW_REQUIRED/);
+});
+
+test('route creation rejects missing liquidity and stale fixed terms even after operator attestation', async t => {
+  for (const [routeState, expectedReason] of [
+    [{ operatorAttested: true, liquidityReady: false, termsValidUntil: new Date(Date.now() + 60_000).toISOString() }, /liquidity/i],
+    [{ operatorAttested: true, liquidityReady: true, termsValidUntil: new Date(Date.now() - 1_000).toISOString() }, /expired/i],
+  ] as const) {
+    const { base, cookieA } = await fixture(t, 20, 10, undefined, undefined, routeState);
+    const capabilities = await (await fetch(`${base}/api/v1/capabilities`)).json() as { orderCreation: { enabled: boolean; reason: string } };
+    assert.equal(capabilities.orderCreation.enabled, false); assert.match(capabilities.orderCreation.reason, expectedReason);
+    const response = await fetch(`${base}/api/v1/order-requests`, { method: 'POST', headers: { cookie: cookieA, origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', 'x-csrf-token': csrfA }, body: JSON.stringify(walletIntent) });
+    assert.equal(response.status, 503); assert.match(await response.text(), expectedReason);
+  }
 });
 
 test('handle, contact, request-intent and inbox APIs require account ownership, origin and CSRF', async t => {
@@ -169,7 +183,7 @@ test('wallet intent rejects invalid recipients, unsupported networks, and premat
   const transparent = await submit({ ...walletIntent, source: { ...walletIntent.source, pool: 'transparent' } });
   assert.equal(transparent.status, 400); assert.match(await transparent.text(), /UNSUPPORTED_SOURCE_POOL/);
   const mainnet = await submit({ ...walletIntent, destination: { ...walletIntent.destination, network: 'base-mainnet', chainId: 8453 } });
-  assert.equal(mainnet.status, 400); assert.match(await mainnet.text(), /UNSUPPORTED_DESTINATION_NETWORK/);
+  assert.equal(mainnet.status, 400); assert.match(await mainnet.text(), /DESTINATION_DISABLED/);
   const created = await submit(walletIntent);
   assert.equal(created.status, 202); const body = await created.json() as { request: { id: string; paymentInstructions?: unknown; destinationRecipient?: unknown; destinationBinding: { walletControlVerification: string } } };
   assert.equal(body.request.paymentInstructions, undefined); assert.equal(body.request.destinationRecipient, undefined); assert.equal(body.request.destinationBinding.walletControlVerification, 'unverified');

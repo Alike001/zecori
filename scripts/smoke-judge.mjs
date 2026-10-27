@@ -18,6 +18,12 @@ if (capabilities.orderCreation?.enabled !== expectedRequests) {
 if (!expectedRequests && capabilities.orderCreation?.state !== 'operator-review-required') {
   throw new Error('Disabled judge route did not report operator-review-required');
 }
+if (!capabilities.destinations?.some(item => item.id === 'base-sepolia-usdc' && item.status === 'supported' && item.network?.chainId === 84532 && item.asset?.contractIdentity?.kind === 'erc20')) {
+  throw new Error('Base Sepolia USDC destination capability is missing or malformed');
+}
+if (capabilities.destinations?.some(item => item.id !== 'base-sepolia-usdc' && item.status === 'supported')) {
+  throw new Error('An unsupported destination is advertised as supported');
+}
 
 const rejected = await fetch(`${base}/api/v1/order-requests`, {
   method: 'POST',

@@ -30,7 +30,7 @@ await new Promise(resolveClose => reservation.close(resolveClose));
 const origin = `http://127.0.0.1:${port}`;
 const screenshotDirectory = process.env.ZECORI_SCREENSHOT_DIR ? resolve(process.env.ZECORI_SCREENSHOT_DIR) : undefined;
 if (screenshotDirectory) await mkdir(screenshotDirectory, { recursive: true });
-const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, speech, speechStatus:speech.status, routeRequestsEnabled:true, rateLimit:{windowMs:60_000,maximum:300}, publicOrigin: origin, staticDirectory: resolve('dist') });
+const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, speech, speechStatus:speech.status, routeReadiness:{operatorAttested:true,liquidityReady:true,termsValidUntil:new Date(Date.now()+60_000).toISOString()}, rateLimit:{windowMs:60_000,maximum:300}, publicOrigin: origin, staticDirectory: resolve('dist') });
 await new Promise(resolveListen => server.listen(port, '127.0.0.1', resolveListen));
 const profile = await mkdtemp(join(tmpdir(), 'zecathon-06a-browser-'));
 const chrome = spawn(process.env.CHROME_BIN ?? 'google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });

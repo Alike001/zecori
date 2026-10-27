@@ -7,17 +7,21 @@ import type { AgentGateway } from './agent-gateway.ts';
 import { validateWalletReadinessIntent } from './wallet-intent.ts';
 import type { DestinationWalletControlService } from './destination-wallet-control-store.ts';
 import { bearerAccessToken, type PrivyIdentityService } from './privy-auth.ts';
-import { routeCapabilitiesForRequestState } from '../src/lib/route-capabilities.ts';
+import { evaluateRouteReadiness, routeCapabilitiesForReadiness, type RouteReadinessInput } from '../src/lib/route-capabilities.ts';
+import { DESTINATION_CAPABILITIES } from '../src/lib/destination-capabilities.ts';
 import { PRODUCT_CAPABILITIES } from '../src/lib/product-capabilities.ts';
 import { SPEECH_LIMITS, type SpeechProvider, type SpeechStatus } from './speech-provider.ts';
 import type { UserFeatureService } from './user-features.ts';
 
-type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; userFeatures: UserFeatureService; speech?: SpeechProvider; speechStatus?: SpeechStatus; walletControl: DestinationWalletControlService; contractWalletsEnabled?: boolean; routeRequestsEnabled?: boolean; privy?: PrivyIdentityService; privyAppId?: string };
+type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; userFeatures: UserFeatureService; speech?: SpeechProvider; speechStatus?: SpeechStatus; walletControl: DestinationWalletControlService; contractWalletsEnabled?: boolean; routeReadiness?: Omit<RouteReadinessInput, 'now'>; privy?: PrivyIdentityService; privyAppId?: string };
 
-function orderCreation(enabled: boolean, contractWalletsEnabled: boolean) { return Object.freeze({
-  enabled,
-  state: enabled ? 'operator-attested-ready' as const : 'operator-review-required' as const,
-  reason: enabled ? 'The deployment operator attested the current testnet request path.' : 'No current provider and signed testnet-path readiness attestation is configured. Exploration and existing history remain available.',
+function currentReadiness(options: ApiOptions) { return evaluateRouteReadiness({ operatorAttested: false, liquidityReady: false, ...options.routeReadiness }); }
+
+function orderCreation(readiness: ReturnType<typeof currentReadiness>, contractWalletsEnabled: boolean) { return Object.freeze({
+  enabled: readiness.enabled,
+  state: readiness.enabled ? 'operator-attested-ready' as const : 'operator-review-required' as const,
+  reason: readiness.reason,
+  readiness,
   binding: 'encrypted-owner-scoped-v2' as const,
   walletControlVerification: contractWalletsEnabled ? 'required-eip712-or-erc1271' as const : 'required-eip712-eoa' as const,
 }); }
@@ -122,13 +126,15 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
         response.setHeader('set-cookie', clearSessionCookies(options.secureCookies)); writeJson(response, 200, { loggedOut: true }); return true;
       }
       if (request.method === 'GET' && url.pathname === '/api/v1/capabilities') {
+        const readiness = currentReadiness(options);
         writeJson(response, 200, {
           apiVersion: 'v1', execution: 'operator-approved-testnet-only', route: PUBLIC_ROUTE_TERMS,
           routeId: 'zcash-testnet-to-base-sepolia-fixed', classification: 'fixed-test-terms',
-          routes: routeCapabilitiesForRequestState(Boolean(options.routeRequestsEnabled)),
+          routes: routeCapabilitiesForReadiness(readiness),
+          destinations: DESTINATION_CAPABILITIES,
           productCapabilities: PRODUCT_CAPABILITIES,
           authentication: { passkeys: true, guestExploration: true, privy: options.privy && options.privyAppId ? { enabled: true, appId: options.privyAppId, loginMethods: ['email', 'google'], embeddedWalletCreation: false, delegatedActions: false, serverSigning: false } : { enabled: false } },
-          orderCreation: orderCreation(Boolean(options.routeRequestsEnabled), Boolean(options.contractWalletsEnabled)),
+          orderCreation: orderCreation(readiness, Boolean(options.contractWalletsEnabled)),
           wallets: {
             zcash: { network: 'zcash-testnet', pool: 'ironwood', connectedMode: 'read-only-capability-check', externalMode: true },
             base: { network: 'base-sepolia', chainId: 84532, contract: PUBLIC_ROUTE_TERMS.destination.contract, connectedMode: 'user-initiated-eip712', manualRecipient: true, addressIntentConfirmation: true, walletControlVerified: true, supportedProofs: options.contractWalletsEnabled ? ['EIP-712 EOA','ERC-1271 deployed contract'] : ['EIP-712 EOA'], contractWallets: options.contractWalletsEnabled ? 'experimental-enabled' : 'disabled-until-live-validation' },
@@ -225,14 +231,16 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
       }
       if (request.method === 'POST' && url.pathname === '/api/v1/order-requests') {
         const authenticated = requireCsrf(options, session, request); const body = await readJson(request, 4_096);
-        if (!options.routeRequestsEnabled) throw Object.assign(new Error('Route requests require current operator provider-readiness review.'), { statusCode: 503, code: 'ROUTE_OPERATOR_REVIEW_REQUIRED' });
+        const readiness = currentReadiness(options);
+        if (!readiness.enabled) throw Object.assign(new Error(readiness.reason), { statusCode: 503, code: 'ROUTE_OPERATOR_REVIEW_REQUIRED' });
         const intent = validateWalletReadinessIntent(body);
         writeJson(response, 202, { request: await store.create(authenticated.userId, intent) }); return true;
       }
       const challenge = url.pathname.match(/^\/api\/v1\/order-requests\/([0-9a-f-]{36})\/destination-challenges$/i);
       if (request.method === 'POST' && challenge) {
         const authenticated = requireCsrf(options, session, request); await readJson(request, 1_024);
-        if (!options.routeRequestsEnabled) throw Object.assign(new Error('Destination proof is unavailable while route requests require operator review.'), { statusCode: 503, code: 'ROUTE_OPERATOR_REVIEW_REQUIRED' });
+        const readiness = currentReadiness(options);
+        if (!readiness.enabled) throw Object.assign(new Error(readiness.reason), { statusCode: 503, code: 'ROUTE_OPERATOR_REVIEW_REQUIRED' });
         writeJson(response, 201, { challenge: await options.walletControl.issue(authenticated, challenge[1], options.allowedOrigin) }); return true;
       }
       const proof = url.pathname.match(/^\/api\/v1\/destination-challenges\/([0-9a-f-]{36})\/verify$/i);

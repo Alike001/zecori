@@ -18,13 +18,15 @@ test('accepts only an exact fixed-route wallet-readiness intent', () => {
 test('rejects unsupported wallet networks and non-Ironwood source funds', () => {
   assert.throws(() => validateWalletReadinessIntent({ ...valid, source: { ...valid.source, network: 'zcash-mainnet' } }), Object.assign(/testnet/, {}));
   assert.throws(() => validateWalletReadinessIntent({ ...valid, source: { ...valid.source, pool: 'transparent' } }), /Ironwood/);
-  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, chainId: 1 } }), /Base Sepolia/);
+  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, network: 'ethereum-sepolia', chainId: 11155111 } }), Object.assign(/not configured/, { code: 'UNSUPPORTED_DESTINATION_NETWORK' }));
+  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, chainId: 8453 } }), Object.assign(/do not match/, { code: 'DESTINATION_CHAIN_MISMATCH' }));
+  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, network: 'base-mainnet', chainId: 8453 } }), Object.assign(/not available/, { code: 'DESTINATION_DISABLED' }));
 });
 
 test('rejects invalid and zero destination recipients', () => {
   assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, address: '0x1234' } }), /complete, non-zero/);
   assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, address: `0x${'0'.repeat(40)}` } }), /complete, non-zero/);
   assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, address: '0x52908400098527886E0F7030069857D2E4169Ee7' } }), /EIP-55/);
-  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, contract: `0x${'2'.repeat(40)}` } }), /official/);
+  assert.throws(() => validateWalletReadinessIntent({ ...valid, destination: { ...valid.destination, contract: `0x${'2'.repeat(40)}` } }), Object.assign(/does not match/, { code: 'DESTINATION_ASSET_MISMATCH' }));
   assert.throws(() => validateWalletReadinessIntent({ ...valid, destinationConsent: { ...valid.destinationConsent, confirmed: false } }), /Explicit confirmation/);
 });

@@ -4,6 +4,8 @@ This is a future approval sequence, not authorization to run it. Commands contai
 
 ## Current findings
 
+- Public request creation is an independent fail-closed gate. Keep it disabled until the operator readiness flag, test-USDC liquidity readiness flag, and a reviewed future fixed-terms deadline are configured together. This does not replace any approval below and does not authorize wallet access or spending.
+
 - Wallet A configuration validation accepts only an existing mode-`0700`, non-symlink data directory with mode-`0600` `default/keys.toml`, testnet loopback RPC at exactly `127.0.0.1:18392`, and never Wallet B's path.
 - The Wallet A health check uses the pinned `zecd v0.9.0-rc2` RPC surface: `getblockchaininfo`, `getwalletinfo`, `getbalance "*" 10`, and `listunspent 10 9999999 [] false`. `z_getbalanceforaccount` does not exist in that release. Aggregate balance is only a consistency check: readiness requires at least `1,010,000` zatoshis in safe, spendable, ten-confirmation `ironwood` notes alone. The pinned source and observed binary return a pool label on each unspent entry, but because the published field list omits it, a missing label fails closed; `z_listtransactions` cannot substitute because it excludes internal change. Transparent, Sapling, and Orchard value is reported but never counted as FullPrivacy-compatible funding.
 - The active PostgreSQL operator CLI now implements the guarded derivation bridge. It commits an encrypted exact-diversifier journal before the only `z_getaddressforaccount` call, validates the returned owned Orchard-only Unified Address and payment history, then binds it transactionally to one immutable order.

@@ -52,9 +52,10 @@ export type PublicCapabilities = {
   classification: 'fixed-test-terms';
   route: PublicRouteTerms;
   routes: import('./route-capabilities.ts').RouteCapability[];
+  destinations: import('./destination-capabilities.ts').DestinationCapability[];
   productCapabilities: import('./product-capabilities.ts').ProductCapability[];
   authentication: { passkeys: true; guestExploration: true; privy: { enabled: boolean; appId?: string; loginMethods?: string[]; embeddedWalletCreation?: false; delegatedActions?: false; serverSigning?: false } };
-  orderCreation: { enabled: boolean; state: 'operator-attested-ready'|'operator-review-required'; reason: string; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-eoa'|'required-eip712-or-erc1271' };
+  orderCreation: { enabled: boolean; state: 'operator-attested-ready'|'operator-review-required'; reason: string; readiness: import('./route-capabilities.ts').RouteReadiness; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-eoa'|'required-eip712-or-erc1271' };
   wallets: {
     zcash: { network: 'zcash-testnet'; pool: 'ironwood'; connectedMode: 'read-only-capability-check'; externalMode: true };
     base: { network: 'base-sepolia'; chainId: 84532; contract: string; connectedMode: 'user-initiated-eip712'; manualRecipient: true; addressIntentConfirmation: true; walletControlVerified: true; supportedProofs: string[] };

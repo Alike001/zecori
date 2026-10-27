@@ -1,5 +1,6 @@
 import { BASE_USDC } from '../src/lib/order-coordinator.ts';
 import { normalizeEvmAddress } from '../src/lib/evm-address.ts';
+import { validateDestinationCapability } from '../src/lib/destination-capabilities.ts';
 
 export const FIXED_ROUTE_ID = 'zcash-testnet-to-base-sepolia-fixed' as const;
 export const DESTINATION_CONSENT_VERSION = 'base-destination-intent-v1' as const;
@@ -33,8 +34,7 @@ export function validateWalletReadinessIntent(body: Record<string, unknown>): Wa
   if (!body.destination || typeof body.destination !== 'object' || Array.isArray(body.destination)) invalid('A Base destination wallet selection is required.');
   const destination = body.destination as Record<string, unknown>;
   if (!['connected-read-only', 'manual'].includes(String(destination.mode))) invalid('The Base wallet mode is unsupported.');
-  if (destination.network !== 'base-sepolia' || destination.chainId !== 84532) invalid('Only Base Sepolia chain 84532 is supported.', 'UNSUPPORTED_DESTINATION_NETWORK');
-  if (destination.contract !== BASE_USDC) invalid('Only the official Base Sepolia test-USDC contract is supported.', 'UNSUPPORTED_DESTINATION_TOKEN');
+  validateDestinationCapability({ network: destination.network, chainId: destination.chainId, contract: destination.contract });
   let address: string;
   try { address = normalizeEvmAddress(String(destination.address ?? '')); }
   catch { invalid('A complete, non-zero Base Sepolia address with a valid mixed-case EIP-55 checksum is required.', 'INVALID_DESTINATION_RECIPIENT'); }
