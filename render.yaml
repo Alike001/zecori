@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: zecori-judge
+    runtime: node
+    plan: free
+    region: frankfurt
+    autoDeployTrigger: off
+    buildCommand: corepack pnpm install --frozen-lockfile && corepack pnpm build && corepack pnpm prune --prod
+    startCommand: sh scripts/render-start.sh
+    healthCheckPath: /health/ready
+    domains:
+      - zecori.iamalikex.tech
+    renderSubdomainPolicy: disabled
+    envVars:
+      - key: NODE_VERSION
+        value: 24.14.1
+      - key: NODE_ENV
+        value: production
+      - key: HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY
+        value: "1"
+      - key: PUBLIC_ORIGIN
+        value: https://zecori.iamalikex.tech
+      - key: WEBAUTHN_RP_ID
+        value: zecori.iamalikex.tech
+      - key: DATABASE_URL
+        sync: false
+      - key: ZECATHON_ENCRYPTION_KEY_FILE
+        value: /etc/secrets/zecori-encryption-keyring.json
+      - key: BASE_SEPOLIA_RPC_URL
+        sync: false
+      - key: ZECORI_DEPLOYMENT_KIND
+        value: public-judge-demo
+      - key: ZECORI_JUDGE_MIGRATIONS_ACK
+        value: MIGRATE_ISOLATED_JUDGE_DATABASE
+      - key: ZECATHON_ROUTE_REQUESTS_ENABLED
+        value: "0"
+      - key: ZECATHON_ROUTE_LIQUIDITY_READY
+        value: "0"
+      - key: ZECATHON_ERC1271_ENABLED
+        value: "0"
+      - key: PRIVY_AUTH_ENABLED
+        value: "0"
+      - key: VOICE_ENABLED
+        value: "0"

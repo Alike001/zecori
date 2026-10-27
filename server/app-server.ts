@@ -65,7 +65,7 @@ function clientKey(request: IncomingMessage, trustProxy: boolean): string {
   return request.socket.remoteAddress ?? 'unknown';
 }
 
-function securityHeaders(response: ServerResponse, privyEnabled: boolean): void {
+function securityHeaders(response: ServerResponse, privyEnabled: boolean, requireProxyHttps: boolean): void {
   const policy = privyEnabled
     ? "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://auth.privy.io https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://auth.privy.io; font-src 'self' data:; child-src https://auth.privy.io; frame-src https://auth.privy.io https://challenges.cloudflare.com; connect-src 'self' https://auth.privy.io; worker-src 'self'; manifest-src 'self'"
     : "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'";
@@ -74,6 +74,7 @@ function securityHeaders(response: ServerResponse, privyEnabled: boolean): void 
   response.setHeader('permissions-policy', 'camera=(), geolocation=(), microphone=(self)');
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('x-frame-options', 'DENY');
+  if (requireProxyHttps) response.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
 }
 
 function json(response: ServerResponse, status: number, body: unknown): void {
@@ -104,7 +105,7 @@ export function createApplicationServer(options: ApplicationServerOptions) {
   const userFeatures = options.userFeatures ?? new MemoryUserFeatures();
   const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), userFeatures, ...(options.speech ? { speech: options.speech } : {}), ...(options.speechStatus ? { speechStatus: options.speechStatus } : {}), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled), routeReadiness: options.routeReadiness, ...(options.privy ? { privy: options.privy, privyAppId: options.privyAppId } : {}) });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
-    securityHeaders(response, Boolean(options.privy));
+    securityHeaders(response, Boolean(options.privy), Boolean(options.requireProxyHttps));
     const url = new URL(request.url ?? '/', 'http://internal');
     if (url.pathname === '/health/live') return json(response, 200, { status: 'live' });
     if (url.pathname === '/health/ready') {

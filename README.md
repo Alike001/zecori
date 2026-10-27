@@ -88,7 +88,9 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 ## Deployment
 
-See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. The [submission release review](docs/submission-release-review.md) records the final local evidence, blockers, and safe PR commands; the [two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) uses verified claims only. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
+For the zero-budget judge deployment, use [Free Render + Neon](docs/free-render-neon-deployment.md). It runs the existing frontend and API as one free web service and keeps durable state in a new external TLS-only PostgreSQL project; it does not require Docker Compose or a developer laptop. The top-level [roadmap](ROADMAP.md) separates implemented, locally tested, live-verified, and blocked work, while [private verifier hosting](docs/private-verifier-hosting.md) defines the separate infrastructure required before any live settlement claim.
+
+See [production deployment](docs/production-deployment.md) for the paid/dedicated Docker Compose path, TLS, secrets, health checks, backups, restore drills, and smoke tests. The [submission release review](docs/submission-release-review.md) records the earlier local evidence, blockers, and safe PR commands; the [two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) uses verified claims only. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
 
 For isolated localhost staging, passkey behavior, encrypted backup/restore, and the exact safe startup commands, see [milestone 05 staging](docs/staging-milestone-05.md).
 

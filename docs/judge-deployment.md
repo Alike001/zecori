@@ -1,5 +1,7 @@
 # Isolated judge deployment
 
+For the zero-budget public judge path, use [Free Render + Neon judge deployment](free-render-neon-deployment.md). The Compose instructions below remain the dedicated-host alternative and must not be used on Render.
+
 Status: prepared, not deployed. This runbook does not authorize DNS changes, host access, secret creation, migrations, provider activation, or wallet activity.
 
 The standalone `compose.judge.yaml` assigns a distinct Compose project, database name, PostgreSQL/Caddy volumes, and secret directory. Do not combine it with staging or production Compose files. It must never reuse a staging hostname, project name, volume, database, backup, password, encryption key, WebAuthn RP ID, or account data.

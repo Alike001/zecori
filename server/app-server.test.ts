@@ -34,7 +34,7 @@ class TestIdentity implements UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined) { return provided === session.csrfToken; }
 }
 
-async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeState: boolean | { operatorAttested: boolean; liquidityReady: boolean; termsValidUntil?: string } = true) {
+async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeState: boolean | { operatorAttested: boolean; liquidityReady: boolean; termsValidUntil?: string } = true, requireProxyHttps = false) {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-server-'));
   await mkdir(join(folder, 'assets'));
   await writeFile(join(folder, 'index.html'), '<!doctype html><main>zecathon-production</main>');
@@ -44,6 +44,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: 
     store, auth: new TestIdentity(), publicOrigin: 'http://127.0.0.1:8787',
     routeReadiness: typeof routeState === 'boolean' ? (routeState ? { operatorAttested: true, liquidityReady: true, termsValidUntil: new Date(Date.now() + 60_000).toISOString() } : { operatorAttested: false, liquidityReady: false }) : routeState,
     staticDirectory: folder, rateLimit: { windowMs: 60_000, maximum }, agentRateLimit: { windowMs: 60_000, maximum: agentMaximum },
+    requireProxyHttps,
     ...(privy ? { privy, privyAppId: 'public-test-app-id' } : {}), ...(speech ? { speech, speechStatus: speech.status } : {}),
   });
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -59,6 +60,16 @@ test('standalone server provides health checks, static assets, and SPA deep link
   assert.match(await (await fetch(`${base}/history/example`)).text(), /zecathon-production/);
   assert.match(await (await fetch(`${base}/assets/app.js`)).text(), /loaded/);
   assert.equal((await fetch(`${base}/api/orders`)).status, 404);
+});
+
+test('production proxy mode emits HSTS and rejects non-HTTPS forwarding', async t => {
+  const { base } = await fixture(t, 20, 10, undefined, undefined, true, true);
+  const secure = await fetch(`${base}/health/live`, { headers: { 'x-forwarded-proto': 'https' } });
+  assert.equal(secure.status, 200);
+  assert.equal(secure.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+  const insecure = await fetch(`${base}/api/v1/capabilities`, { headers: { 'x-forwarded-proto': 'http' } });
+  assert.equal(insecure.status, 400);
+  assert.match(await insecure.text(), /HTTPS_REQUIRED/);
 });
 
 const walletIntent = fixedWalletReadinessIntent(`0x${'4'.repeat(40)}`);
