@@ -1,7 +1,7 @@
 # Noir Wallet v1.0.40 compatibility assessment
 
 Assessment date: 2026-10-27
-Disposition: **DISABLED / READ-ONLY ACCEPTANCE PREPARED**
+Disposition: **SDK CONNECTION IMPLEMENTED / SENDING DISABLED**
 Financial status: **first linked swap remains NO-GO**
 
 ## Primary sources reviewed
@@ -29,17 +29,18 @@ Known limits remain: cross-restart transaction recovery and automatic resend are
 
 ## Zecori compatibility result
 
-Noir's documented startup-safe method is `getAccounts()`, mapped to raw RPC `zcash_getAccounts`. Provider detection and this silent call do not open account approval. `connect()` / `zcash_requestAccounts` must follow a deliberate user action; balance, address, max-transfer, signing, shielding, and transaction methods exceed this milestone's read-only probe.
+Noir's documented startup-safe method is `getAccounts()`, mapped to raw RPC `zcash_getAccounts`. Provider detection and this silent call do not open account approval. Zecori now calls `connect()` / `zcash_requestAccounts` only from a deliberate Connect click and then reads `getBalance(account.id)` for authorized account readiness. Address enumeration, max-transfer, signing, shielding, disconnect, and transaction methods remain excluded.
 
 The v1 account result provides transparent/shielded addresses and authorized account metadata. It does **not** attest the installed extension's network build or an Ironwood source-pool capability. Noir distributes separate mainnet and testnet extensions and deprecates runtime switching. Zecori therefore cannot safely translate a successful silent account response into its stricter `zcash-testnet` + `ironwood` + `readOnly` capability contract.
 
 Implementation evidence:
 
-- `src/lib/noir-wallet-readonly.ts` calls only `zcash_getAccounts` and always remains not-ready until build/network and pool attestation are reviewed.
-- `src/lib/noir-wallet-readonly.test.ts` proves detection, existing-authorization behavior, invalid-response failure, and the absence of connection, balance, address, signing, shielding, transaction, and disconnect calls.
+- `src/lib/noir-wallet-readonly.ts` uses the official SDK, restores only prior authorization silently, requests consent interactively, classifies shielded/available/pending balance in browser memory, invalidates account changes and stale state, and always remains not-ready until build/network and pool attestation are reviewed.
+- `src/lib/noir-wallet-readonly.test.ts` proves detection, missing extension, rejected authorization, wrong build, insufficient funds, wallet switching, stale readiness, and the absence of address, signing, shielding, transaction, and disconnect calls.
+- `src/lib/noir-payment-confirmation.ts` prepares but cannot execute an exact, expiring, immutable-order-bound future request and rejects transparent funding.
 - `scripts/noir-wallet-isolated-smoke.mjs` creates a fresh temporary Chrome profile, refuses non-loopback Zecori URLs, requires an explicitly Testnet manifest at version 1.0.40, calls only `zcash_getAccounts`, and deletes the temporary profile.
 
-The isolated extension smoke was **not run** because no separately checksum-verified official testnet extension directory was supplied. No existing Noir profile or wallet was inspected or altered.
+The official testnet ZIP was downloaded from the maintainer release and matched its published SHA-256 `e4fdfd9702cd1252b1e40d888952e12bcf7a9caaa4ad103380839aea54d7897b`. The isolated smoke passed with Chrome for Testing in a fresh disposable profile: provider v1.0.40 was detected and the only requested method was `zcash_getAccounts`. The untouched profile reported `Wallet not unlocked`, which the harness records as an expected locked state rather than authorization. The profile was deleted; no wallet was created, unlocked, funded, or altered.
 
 ## Safe future acceptance procedure
 
