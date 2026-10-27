@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { PublicOrderRequest } from './order-api.ts';
-import { copyExactReceiver, preparePaymentReadyInstructions, recipientFromClipboard } from './payment-ready.ts';
+import { assertExactReceiverChannels, copyExactReceiver, preparePaymentReadyInstructions, recipientFromClipboard } from './payment-ready.ts';
 
 const receiver = `utest1${'q'.repeat(120)}`;
 const recipient = '0x1111111111111111111111111111111111111111';
@@ -32,6 +32,8 @@ test('PAYMENT_READY presentation preserves exact receiver in display, copy, and 
   let copied = '';
   await copyExactReceiver(prepared.receiver, { writeText: async value => { copied = value; } });
   assert.equal(copied, prepared.qrPayload);
+  assert.doesNotThrow(() => assertExactReceiverChannels(prepared.receiver, copied, prepared.qrPayload));
+  assert.throws(() => assertExactReceiverChannels(prepared.receiver, `${copied}\u200b`, prepared.qrPayload), /byte-for-byte/);
 });
 
 test('instructions fail closed before allocation, after expiry, after status advance, and on term mutation', () => {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { NoirWalletProvider, ZcashBalanceResult, ZcashConnectResult } from '@noir-wallet/sdk';
-import { detectOfficialNoirWallet, expireNoirReadiness, inspectNoirWallet, subscribeToNoirAccountChanges } from './noir-wallet-readonly.ts';
+import { detectOfficialNoirWallet, expireNoirReadiness, inspectNoirWallet, probeNoirShieldedMaxTransfer, subscribeToNoirAccountChanges } from './noir-wallet-readonly.ts';
 
 const connection: ZcashConnectResult = {
   transparent: 'transparent-private-browser-data', shielded: 'shielded-private-browser-data',
@@ -13,14 +13,16 @@ function balance(overrides: Partial<ZcashBalanceResult> = {}): ZcashBalanceResul
   return { ...primary, accounts: [{ id: 'wallet:account', walletId: 'wallet', accountId: 'account', synced: true, balance: primary }] };
 }
 
-function wallet(options: { version?: string; accounts?: ZcashConnectResult | null; balance?: ZcashBalanceResult; connectError?: unknown; calls?: string[]; listeners?: Map<string, (...args: unknown[]) => void> } = {}): NoirWalletProvider {
+function wallet(options: { version?: string; accounts?: ZcashConnectResult | null; balance?: ZcashBalanceResult; connectError?: unknown; calls?: string[]; listeners?: Map<string, (...args: unknown[]) => void>; max?: { maxAmount: string; fee: string }; switchedAccounts?: boolean } = {}): NoirWalletProvider {
   const calls = options.calls ?? [];
+  let accountReads = 0;
   return {
     isNoirWallet: true, ...(options.version === undefined ? { version: '1.0.40' } : { version: options.version }),
     zcash: {
       connect: async () => { calls.push('connect'); if (options.connectError) throw options.connectError; return options.accounts ?? connection; },
-      getAccounts: async () => { calls.push('getAccounts'); return options.accounts === undefined ? connection : options.accounts; },
+      getAccounts: async () => { calls.push('getAccounts'); accountReads += 1; if (options.switchedAccounts && accountReads > 1) return { ...connection, accounts: [{ ...connection.accounts[0], id: 'wallet:other' }] }; return options.accounts === undefined ? connection : options.accounts; },
       getBalance: async () => { calls.push('getBalance'); return options.balance ?? balance(); },
+      getMaxTransfer: async (params: unknown) => { calls.push(`getMaxTransfer:${JSON.stringify(params)}`); return options.max ?? { maxAmount: '0.0199', fee: '0.0001' }; },
       on: (event: string, handler: (...args: unknown[]) => void) => { calls.push(`on:${event}`); options.listeners?.set(event, handler); },
       removeListener: (event: string) => { calls.push(`remove:${event}`); options.listeners?.delete(event); },
     },
@@ -89,4 +91,29 @@ test('wallet account or chain switching invalidates and stale readiness expires'
   const readiness = await inspectNoirWallet(provider, 'silent', 100);
   assert.equal(expireNoirReadiness(readiness, 30_100).code, readiness.code);
   assert.equal(expireNoirReadiness(readiness, 30_101).code, 'STALE');
+});
+
+test('recipient-aware Max probe is shielded-only, account-stable, and never enables spending', async () => {
+  const calls: string[] = [];
+  const result = await probeNoirShieldedMaxTransfer(wallet({ calls }), `utest1${'q'.repeat(120)}`);
+  assert.equal(result.canCoverExactPayment, true);
+  assert.equal(result.fundingSource, 'shielded');
+  assert.equal(result.memo, '');
+  assert.equal(result.spendingEnabled, false);
+  assert.equal(result.networkAttested, false);
+  assert.equal(result.ironwoodAttested, false);
+  assert.deepEqual(calls, [
+    'getAccounts',
+    `getMaxTransfer:${JSON.stringify({ to: `utest1${'q'.repeat(120)}`, memo: '', feeTier: 'standard', fundingSource: 'shielded' })}`,
+    'getAccounts',
+  ]);
+  assert.ok(!calls.some(method => /sendTransaction|sign/i.test(method)));
+});
+
+test('Max probe rejects wrong builds, unsafe receivers, account changes, and insufficient exact Max', async () => {
+  await assert.rejects(probeNoirShieldedMaxTransfer(wallet({ version: '1.0.39' }), `utest1${'q'.repeat(120)}`), /reviewed/);
+  await assert.rejects(probeNoirShieldedMaxTransfer(wallet(), `utest1${'q'.repeat(20)}\u200b`), /clean/);
+  await assert.rejects(probeNoirShieldedMaxTransfer(wallet({ switchedAccounts: true }), `utest1${'q'.repeat(120)}`), /changed/);
+  const insufficient = await probeNoirShieldedMaxTransfer(wallet({ max: { maxAmount: '0.0099', fee: '0.0001' } }), `utest1${'q'.repeat(120)}`);
+  assert.equal(insufficient.canCoverExactPayment, false);
 });

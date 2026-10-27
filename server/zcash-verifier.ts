@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 import { isFullTransactionId } from '../src/lib/order-coordinator.ts';
 import type { ZcashShieldedReceipt } from '../src/lib/read-only-verification.ts';
 import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
@@ -10,7 +10,7 @@ export const ZECD_WALLET_B_RPC = 'http://127.0.0.1:18393/';
 export const ZECD_WALLET_B_DATA = join(homedir(), '.local', 'share', 'zecd-wallet-b-testnet');
 export const ZECD_WALLET_B_NAME = 'default';
 
-type WalletInfo = { scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; private_keys_enabled?: boolean; unlocked_until?: number };
+type WalletInfo = { walletname?: string; scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; private_keys_enabled?: boolean; unlocked_until?: number };
 type AddressInfo = { address?: string; ismine?: boolean; isvalid_orchard?: boolean; receiver_types?: string[]; receivers_consistent?: boolean; diversifier_index?: number | string };
 type WalletTransaction = { txid?: string; confirmations?: number; blockhash?: string; blockheight?: number; blocktime?: number; details?: HistoryEntry[] };
 type HistoryEntry = { txid?: string; status?: string; confirmations?: number; pool?: string; category?: string; amountZat?: number | string; address?: string; outgoing?: boolean; change?: boolean; blockhash?: string; blockheight?: number; diversifier_index?: number | string; outindex?: number };
@@ -32,14 +32,59 @@ function exactInteger(value: number | string | undefined): string | undefined {
   return typeof value === 'string' && /^\d+$/.test(value) ? BigInt(value).toString() : undefined;
 }
 
+export function verifierZecdDataDir(env: NodeJS.ProcessEnv = process.env): string {
+  const configured = env.ZECATHON_VERIFIER_ZECD_DATA_DIR?.trim();
+  if (!configured) return ZECD_WALLET_B_DATA;
+  if (!isAbsolute(configured)) throw new Error('ZECATHON_VERIFIER_ZECD_DATA_DIR must be an absolute private path');
+  return resolve(configured);
+}
+
 export async function walletBCookieAuthorization(): Promise<string> {
-  const cookie = (await readFile(join(ZECD_WALLET_B_DATA, '.cookie'), 'utf8')).trim();
+  const cookie = (await readFile(join(verifierZecdDataDir(), '.cookie'), 'utf8')).trim();
   if (!cookie || cookie.includes('\n')) throw new Error('Invalid zecd RPC cookie');
   return `Basic ${Buffer.from(cookie).toString('base64')}`;
 }
 
 export async function walletBRpc(): Promise<RpcCall> {
   return jsonRpcClient(ZECD_WALLET_B_RPC, { authorization: await walletBCookieAuthorization(), version: '1.0', timeoutMs: 8_000 });
+}
+
+export type WatchOnlyVerifierHealth = {
+  network: 'zcash-testnet';
+  custody: 'watch-only';
+  walletName: string;
+  synchronized: true;
+  historyComplete: true;
+  blocks: number;
+  bestBlockHash: string;
+  transactionCount: number;
+};
+
+/**
+ * Read-only startup/restart gate for the private relay host. Allocation remains
+ * on the separately authorized Wallet B spending instance; this verifier must
+ * contain a UFVK only and must never be accepted merely because it is locked.
+ */
+export async function checkWatchOnlyVerifierHealth(
+  rpc?: RpcCall,
+  expectedWalletName = ZECD_WALLET_B_NAME,
+  now = Date.now(),
+): Promise<WatchOnlyVerifierHealth> {
+  const call = rpc ?? await walletBRpc();
+  const [chain, wallet] = await Promise.all([
+    call<ZecdChainInfo>('getblockchaininfo'),
+    call<WalletInfo>('getwalletinfo'),
+  ]);
+  assertFreshTestnetZecdChain(chain, now);
+  if (wallet.walletname !== expectedWalletName) throw new Error('zecd verifier wallet identity does not match the configured watch-only wallet');
+  if (wallet.private_keys_enabled !== false || wallet.unlocked_until !== undefined) throw new Error('zecd verifier must be seedless watch-only custody');
+  if (wallet.scanning !== false || wallet.import_error || wallet.enhanced_through !== chain.blocks) throw new Error('zecd verifier scan or history enhancement is incomplete');
+  if (!Number.isSafeInteger(wallet.txcount) || (wallet.txcount as number) < 0) throw new Error('zecd verifier transaction count is unavailable');
+  return {
+    network: 'zcash-testnet', custody: 'watch-only', walletName: expectedWalletName,
+    synchronized: true, historyComplete: true, blocks: chain.blocks,
+    bestBlockHash: chain.bestblockhash, transactionCount: wallet.txcount as number,
+  };
 }
 
 export async function verifyZcashTransaction(

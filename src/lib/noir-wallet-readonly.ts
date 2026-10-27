@@ -50,6 +50,20 @@ export type NoirWalletReadiness = {
   };
 };
 
+export type NoirMaxTransferProbe = Readonly<{
+  requestedAmount: typeof NOIR_REQUIRED_ZEC;
+  fundingSource: 'shielded';
+  memo: '';
+  feeTier: 'standard';
+  maxAmount: string;
+  fee: string;
+  canCoverExactPayment: boolean;
+  accountStable: true;
+  spendingEnabled: false;
+  networkAttested: false;
+  ironwoodAttested: false;
+}>;
+
 type NoirDetector = {
   getWallet(): NoirWalletProvider | null;
   detect(timeout: number): Promise<unknown>;
@@ -103,6 +117,10 @@ function atomicToDecimal(value: bigint, decimals = 8): string {
   const whole = value / base;
   const fraction = (value % base).toString().padStart(decimals, '0').replace(/0+$/, '');
   return fraction ? `${whole}.${fraction}` : whole.toString();
+}
+
+function primaryAccountId(connection: ZcashConnectResult | null): string | undefined {
+  return connection && validConnection(connection) ? connection.accounts[0]?.id : undefined;
 }
 
 function classifyBalance(raw: ZcashBalanceResult, accountId: string): NoirBalanceReadiness {
@@ -217,6 +235,36 @@ export function subscribeToNoirAccountChanges(wallet: NoirWalletProvider, listen
     wallet.zcash.removeListener('accountsChanged', listener);
     wallet.zcash.removeListener('chainChanged', listener);
   };
+}
+
+/**
+ * Performs the recipient-aware Max calculation without preparing, signing, or
+ * broadcasting a transaction. Call only from an explicit operator-driven
+ * acceptance action after the exact allocated receiver is available.
+ *
+ * A successful result is deliberately not a payment-ready signal: SDK 0.1.9
+ * still cannot attest the installed network build or the source note pool.
+ */
+export async function probeNoirShieldedMaxTransfer(wallet: NoirWalletProvider | null, receiver: string): Promise<NoirMaxTransferProbe> {
+  if (!wallet?.isNoirWallet || !wallet.zcash) throw new Error('Official Noir Wallet was not detected.');
+  if (wallet.version !== NOIR_REVIEWED_EXTENSION_VERSION) throw new Error(`Expected the reviewed Noir Wallet ${NOIR_REVIEWED_EXTENSION_VERSION} build.`);
+  if (!receiver.startsWith('utest1') || receiver !== receiver.trim() || /[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060\ufeff]/u.test(receiver)) {
+    throw new Error('An exact clean Zcash testnet receiver is required for Max calculation.');
+  }
+  const before = await wallet.zcash.getAccounts();
+  const beforeId = primaryAccountId(before);
+  if (!beforeId) throw new Error('No authorized Noir account is available.');
+  const estimate = await wallet.zcash.getMaxTransfer({ to: receiver, memo: '', feeTier: 'standard', fundingSource: 'shielded' });
+  const after = await wallet.zcash.getAccounts();
+  if (primaryAccountId(after) !== beforeId) throw new Error('The Noir account changed during Max calculation; the result was discarded.');
+  const max = decimalToAtomic(estimate.maxAmount);
+  const fee = decimalToAtomic(estimate.fee);
+  if (max === null || fee === null) throw new Error('Noir Wallet returned an inexact Max or fee amount.');
+  return Object.freeze({
+    requestedAmount: NOIR_REQUIRED_ZEC, fundingSource: 'shielded', memo: '', feeTier: 'standard',
+    maxAmount: atomicToDecimal(max), fee: atomicToDecimal(fee), canCoverExactPayment: max >= decimalToAtomic(NOIR_REQUIRED_ZEC)!,
+    accountStable: true, spendingEnabled: false, networkAttested: false, ironwoodAttested: false,
+  });
 }
 
 export const inspectNoirWalletReadOnly = (wallet: NoirWalletProvider | undefined) => inspectNoirWallet(wallet ?? null, 'silent');
