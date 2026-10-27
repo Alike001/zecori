@@ -24,6 +24,7 @@ export type PublicOrderRequest = {
   expiresAt: string;
   destinationBinding: { status: 'confirmed' | 'bound' | 'expired' | 'revoked' | 'legacy-unverified'; consentConfirmedAt?: string; walletControlVerification: 'unverified' | 'verified-eoa' | 'verified-erc1271'; verifiedAt?: string };
   terms: typeof PUBLIC_ROUTE_TERMS;
+  destinationReview?: { recipient: string; network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; contract: typeof BASE_USDC; amountAtomic: '1000000' };
   linkedOrderId?: string;
   paymentInstructions?: { receiver: string; expiresAt: string };
   order?: Record<string, unknown>;
@@ -96,9 +97,13 @@ function fromRow(row: RequestRow, encryption?: DataEncryption): PublicOrderReque
   const instructions = row.encrypted_payment_receiver
     ? encryption?.decrypt<{ receiver: string }>(row.encrypted_payment_receiver, `request:${row.request_id}:receiver`)
     : undefined;
+  const intent = row.intent_id && row.encrypted_intent && encryption
+    ? encryption.decrypt<DestinationIntentPayload>(row.encrypted_intent, destinationIntentContext(row.intent_id))
+    : undefined;
   return {
     id: row.request_id, status: row.status, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(),
     terms: PUBLIC_ROUTE_TERMS,
+    ...(instructions && intent ? { destinationReview: { recipient: intent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
     destinationBinding: row.destination_binding_version === 2 && row.intent_status
       ? { status: row.intent_status.toLowerCase() as 'confirmed' | 'bound' | 'expired' | 'revoked', ...(row.consent_confirmed_at ? { consentConfirmedAt: row.consent_confirmed_at.toISOString() } : {}), walletControlVerification: row.proof_status === 'VERIFIED' ? (row.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eoa') : 'unverified', ...(row.proof_status === 'VERIFIED' && row.proof_verified_at ? { verifiedAt: row.proof_verified_at.toISOString() } : {}) }
       : { status: 'legacy-unverified', walletControlVerification: 'unverified' },

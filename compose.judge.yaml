@@ -1,0 +1,110 @@
+name: ${JUDGE_COMPOSE_PROJECT_NAME:-zecori-judge}
+
+# Standalone judge stack. Do not combine this file with staging Compose files.
+services:
+  caddy:
+    image: caddy:2.10.2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set the dedicated judge hostname}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api: { condition: service_healthy }
+    networks: [edge]
+
+  api:
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?Set VCS_REF to the reviewed 40-character revision}
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=32m,mode=1777]
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 8787
+      TRUST_PROXY: "1"
+      PUBLIC_ORIGIN: https://${DOMAIN}
+      WEBAUTHN_RP_ID: ${DOMAIN}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:?Set a trusted Base Sepolia HTTPS RPC URL}
+      ZECATHON_ERC1271_ENABLED: "0"
+      ZECATHON_ROUTE_REQUESTS_ENABLED: ${ZECATHON_ROUTE_REQUESTS_ENABLED:-0}
+      DB_HOST: postgres
+      DB_NAME: zecori_judge
+      DB_USER: zecori_judge
+      DB_PASSWORD_FILE: /run/secrets/db_password
+      ZECATHON_ENCRYPTION_KEY_FILE: /run/secrets/encryption_keyring
+    secrets: [db_password, encryption_keyring]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8787/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [edge, data]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  verifier:
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?Set VCS_REF to the reviewed 40-character revision}
+    command: ["node", "--experimental-strip-types", "server/verifier-service.ts"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp:size=16m,mode=1777]
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8790
+      VERIFIER_TOKEN_FILE: /run/secrets/verifier_token
+    secrets: [verifier_token]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8790/health/ready').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+    networks: [verification]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+
+  postgres:
+    image: postgres:17.7-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: zecori_judge
+      POSTGRES_USER: zecori_judge
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zecori_judge -d zecori_judge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [data]
+
+networks:
+  edge: {}
+  data: { internal: true }
+  verification: { internal: true }
+
+volumes:
+  postgres_data: {}
+  caddy_data: {}
+  caddy_config: {}
+
+secrets:
+  db_password:
+    file: ./deploy/judge/secrets/db_password
+  verifier_token:
+    file: ./deploy/judge/secrets/verifier_token
+  encryption_keyring:
+    file: ./deploy/judge/secrets/encryption-keyring.json

@@ -18,6 +18,7 @@ export type PublicOrderRequest = {
   expiresAt: string;
   destinationBinding: { status: 'confirmed' | 'bound' | 'expired' | 'revoked' | 'legacy-unverified'; consentConfirmedAt?: string; walletControlVerification: 'unverified' | 'verified-eoa' | 'verified-erc1271'; verifiedAt?: string };
   terms: PublicRouteTerms;
+  destinationReview?: { recipient: string; network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; contract: string; amountAtomic: '1000000' };
   linkedOrderId?: string;
   paymentInstructions?: { receiver: string; expiresAt: string };
   order?: { finalReceiptId?: string; resolutionReason?: string };
@@ -53,7 +54,7 @@ export type PublicCapabilities = {
   routes: import('./route-capabilities.ts').RouteCapability[];
   productCapabilities: import('./product-capabilities.ts').ProductCapability[];
   authentication: { passkeys: true; guestExploration: true; privy: { enabled: boolean; appId?: string; loginMethods?: string[]; embeddedWalletCreation?: false; delegatedActions?: false; serverSigning?: false } };
-  orderCreation: { enabled: true; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-or-erc1271' };
+  orderCreation: { enabled: boolean; state: 'operator-attested-ready'|'operator-review-required'; reason: string; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-eoa'|'required-eip712-or-erc1271' };
   wallets: {
     zcash: { network: 'zcash-testnet'; pool: 'ironwood'; connectedMode: 'read-only-capability-check'; externalMode: true };
     base: { network: 'base-sepolia'; chainId: 84532; contract: string; connectedMode: 'user-initiated-eip712'; manualRecipient: true; addressIntentConfirmation: true; walletControlVerified: true; supportedProofs: string[] };

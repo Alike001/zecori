@@ -25,6 +25,7 @@
     "privacy:scan": "node scripts/privacy-scan.mjs",
     "security:gate": "node scripts/verify-readonly.mjs",
     "smoke:passkey": "node scripts/passkey-browser-smoke.mjs",
+    "smoke:judge": "node scripts/smoke-judge.mjs",
     "test:browser": "node --experimental-strip-types scripts/milestone-06a-browser-smoke.mjs",
     "test:a11y": "node --experimental-strip-types scripts/milestone-06a-browser-smoke.mjs",
     "docs:validate": "node scripts/validate-docs.mjs",

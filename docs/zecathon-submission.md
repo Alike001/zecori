@@ -1,6 +1,6 @@
 # Zecori — Zecathon submission packet
 
-Status: draft evidence packet. It is not a submitted entry and does not claim eligibility or rule compliance.
+Status: draft evidence packet. It is not a submitted entry and does not claim eligibility or rule compliance. No authenticated Cross-Chain rules artifact or submission receipt is present locally.
 
 ## Official requirements checked
 
@@ -69,7 +69,7 @@ The public application cannot derive a Zcash address, unlock a wallet, allocate,
 
 ## Implemented capability inventory
 
-- Public responsive route discovery and fixed-term review.
+- Public responsive route discovery and fixed-term review. Request creation fails closed by default until the deployment operator explicitly attests current provider/testnet-path readiness.
 - Exact route registry: 0.01 TAZ on Zcash testnet Ironwood → 1 test USDC on Base Sepolia 84532.
 - Passkey registration, login, additional credentials, revocation, session rotation, and owner isolation.
 - Purpose-limited EIP-712 EOA destination-control proof with replay and owner checks.
@@ -82,10 +82,10 @@ The public application cannot derive a Zcash address, unlock a wallet, allocate,
 
 ## Limitations
 
-- The first linked funded shielded-to-Base settlement has not been approved or performed.
+- The first linked funded shielded-to-Base settlement has not been approved or performed; the route is presented as implemented but not live, not as a verified successful bridge.
 - Real human Privy login is disabled and untested. Its vulnerable React connector graph is compiled out and absent from the production dependency tree/image, but it remains a blocker to re-enablement.
 - Live Groq chat, speech model availability/quota, physical microphone behavior, and pronunciation are untested.
-- Durable staging has not been migrated or exercised in this milestone.
+- Durable staging has not been migrated or exercised in this milestone. A separate judge Compose stack and smoke runbook are prepared but have not been deployed.
 - Payment by handle, ERC-1271 contract wallets, mainnet, live quotes, automatic settlement/refunds, external notifications, email, and settings are disabled or planned.
 - Zecori is a provisional brand without trademark or domain clearance.
 
@@ -114,13 +114,13 @@ Do not use fabricated completed-payment screenshots. A receipt screenshot may us
 
 **0:00–0:20 — Problem.** “Cross-chain products often erase Zcash privacy or hide where it ends. Zecori starts from a shielded Ironwood payment and makes the transparent destination boundary explicit.”
 
-**0:20–0:45 — Exact route.** Show the homepage and route registry. “Only 0.01 TAZ to 1 test USDC on Base Sepolia is enabled. This is fixed test data, not a quote. The experimental trusted LP and manual payout gate are visible.”
+**0:20–0:45 — Exact route.** Show the homepage and route registry. “The implemented path is exactly 0.01 TAZ to 1 test USDC on Base Sepolia. This is fixed test data, not a quote. Requests are closed unless this deployment has a current operator readiness attestation.”
 
 **0:45–1:15 — Guarded request.** Open the route. Show read-only checks, passkey boundary, recipient validation, and purpose-limited EIP-712 proof. “The signature proves destination control only. It cannot transfer tokens or authorize payout.”
 
 **1:15–1:40 — Evidence.** Show a disposable fixture lifecycle and branded receipt state. “The browser cannot declare success. A receipt appears only after independent source and destination verification.”
 
-**1:40–2:00 — Honest limits.** Open the truth matrix. “The first funded linked settlement, Privy, live Groq/voice, mainnet, automatic settlement, and refunds remain gated. The next step is a separately approved human test—not a fictional animation.”
+**1:40–2:00 — Honest limits.** Open the truth matrix. “The first funded linked settlement, public judge deployment, Privy, live Groq/voice, mainnet, automatic settlement, and refunds remain gated. The next step is a separately approved human test—not a fictional animation.”
 
 ## Roadmap
 

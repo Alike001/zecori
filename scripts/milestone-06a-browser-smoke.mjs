@@ -30,7 +30,7 @@ await new Promise(resolveClose => reservation.close(resolveClose));
 const origin = `http://127.0.0.1:${port}`;
 const screenshotDirectory = process.env.ZECORI_SCREENSHOT_DIR ? resolve(process.env.ZECORI_SCREENSHOT_DIR) : undefined;
 if (screenshotDirectory) await mkdir(screenshotDirectory, { recursive: true });
-const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, speech, speechStatus:speech.status, rateLimit:{windowMs:60_000,maximum:300}, publicOrigin: origin, staticDirectory: resolve('dist') });
+const server = createApplicationServer({ store: new MemoryPublicOrderRequestStore(), auth, speech, speechStatus:speech.status, routeRequestsEnabled:true, rateLimit:{windowMs:60_000,maximum:300}, publicOrigin: origin, staticDirectory: resolve('dist') });
 await new Promise(resolveListen => server.listen(port, '127.0.0.1', resolveListen));
 const profile = await mkdtemp(join(tmpdir(), 'zecathon-06a-browser-'));
 const chrome = spawn(process.env.CHROME_BIN ?? 'google-chrome', ['--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
@@ -63,7 +63,7 @@ try {
 
   await waitFor(`document.body?.innerText.includes('Private origin.')===true`, 'public product homepage');
   const landing = await evaluate(`({text:document.body.innerText,width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,menu:document.querySelector('.menu-toggle')!==null,brand:document.querySelector('.brand-name')?.textContent,mark:document.querySelector('.zecori-mark')?.getAttribute('aria-label')})`);
-  for (const disclosure of ['one experimental testnet route','0.01 taz','1 test usdc','research only','do not send funds','shielded in. transparent out.','experimental trusted lp']) if (!landing.text.toLowerCase().includes(disclosure)) throw new Error(`Landing disclosure is missing: ${disclosure}`);
+  for (const disclosure of ['one implemented testnet route','operator readiness required','0.01 taz','1 test usdc','research only','do not send funds','shielded in. transparent out.','experimental trusted lp']) if (!landing.text.toLowerCase().includes(disclosure)) throw new Error(`Landing disclosure is missing: ${disclosure}`);
   for (const productElement of ['working product preview','honest roadmap','5-minute walkthrough']) if (!landing.text.toLowerCase().includes(productElement)) throw new Error(`Landing product element is missing: ${productElement}`);
   await capture('landing-mobile.png', 390, 844, true);
   await capture('landing-desktop.png', 1440, 1100, false);
@@ -102,7 +102,7 @@ try {
   await waitFor(`document.querySelector('.docs-page')?.getAttribute('dir')==='ltr' && document.body.innerText.includes('révision humaine')`, 'French documentation disclosure');
   await send('Emulation.setLocaleOverride', { locale: 'en-US' }, sessionId); await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(navigator,'language',{configurable:true,get:()=> 'en-US'});` }, sessionId);
   await send('Page.navigate', { url: origin }, sessionId); await waitFor(`document.body?.innerText.includes('Private origin.')===true`, 'homepage after docs');
-  if (!await click('Explore the working route')) throw new Error('Primary route CTA is missing');
+  if (!await click('Inspect route readiness')) throw new Error('Primary route CTA is missing');
   await waitFor(`location.pathname==='/swap' && document.body?.innerText.includes('FIXED TEST ROUTE')===true`, 'public fixed-route explorer');
   const initial = await evaluate(`({text:document.body.innerText,width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,requestDisabled:document.querySelector('.request-gate button')?.disabled})`);
   if (!initial.text.includes('Sign in only when you are ready to request.')) throw new Error('Passkey boundary is missing');

@@ -31,6 +31,7 @@ export type ApplicationServerOptions = {
   speechStatus?: SpeechStatus;
   walletControl?: DestinationWalletControlService;
   contractWalletsEnabled?: boolean;
+  routeRequestsEnabled?: boolean;
   privy?: PrivyIdentityService;
   privyAppId?: string;
   userFeatures?: UserFeatureService;
@@ -100,7 +101,7 @@ export function createApplicationServer(options: ApplicationServerOptions) {
   const handleLimiter = new RateLimiter(60_000, 10);
   const walletControl = options.walletControl ?? new UnavailableDestinationWalletControl();
   const userFeatures = options.userFeatures ?? new MemoryUserFeatures();
-  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), userFeatures, ...(options.speech ? { speech: options.speech } : {}), ...(options.speechStatus ? { speechStatus: options.speechStatus } : {}), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled), ...(options.privy ? { privy: options.privy, privyAppId: options.privyAppId } : {}) });
+  const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), userFeatures, ...(options.speech ? { speech: options.speech } : {}), ...(options.speechStatus ? { speechStatus: options.speechStatus } : {}), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled), routeRequestsEnabled: Boolean(options.routeRequestsEnabled), ...(options.privy ? { privy: options.privy, privyAppId: options.privyAppId } : {}) });
   const server = createServer({ maxHeaderSize: 16_384, requestTimeout: 15_000, headersTimeout: 10_000, keepAliveTimeout: 5_000 }, async (request, response) => {
     securityHeaders(response, Boolean(options.privy));
     const url = new URL(request.url ?? '/', 'http://internal');
@@ -170,11 +171,13 @@ async function start(): Promise<void> {
   const agentProvider = await loadAgentProvider();
   const speech = await loadSpeechProvider();
   const walletPolicy = contractWalletPolicy(process.env.ZECATHON_ERC1271_ENABLED);
+  const routeRequestsFlag = process.env.ZECATHON_ROUTE_REQUESTS_ENABLED ?? '0';
+  if (!['0', '1'].includes(routeRequestsFlag)) throw new Error('ZECATHON_ROUTE_REQUESTS_ENABLED must be exactly 0 or 1');
   const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL, walletPolicy);
   if (!walletVerifier) throw new Error('BASE_SEPOLIA_RPC_URL is required for destination wallet verification');
   const agentRequestsPerMinute = Number(process.env.AI_AGENT_REQUESTS_PER_MINUTE ?? '10');
   if (!Number.isSafeInteger(agentRequestsPerMinute) || agentRequestsPerMinute < 1 || agentRequestsPerMinute > 60) throw new Error('AI_AGENT_REQUESTS_PER_MINUTE must be an integer from 1 to 60.');
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, userFeatures: new PostgresUserFeatures(pool, encryption), walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), ...(speech.provider ? { speech: speech.provider } : {}), speechStatus: speech.status, agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1', ...(privy ? { privy, privyAppId } : {}) });
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, userFeatures: new PostgresUserFeatures(pool, encryption), walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, routeRequestsEnabled: routeRequestsFlag === '1', agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), ...(speech.provider ? { speech: speech.provider } : {}), speechStatus: speech.status, agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1', ...(privy ? { privy, privyAppId } : {}) });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

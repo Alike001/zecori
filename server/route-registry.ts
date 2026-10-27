@@ -7,7 +7,7 @@ export const PUBLIC_ROUTE_ID = EXECUTABLE_ROUTE_ID;
 export const PUBLIC_ROUTE_REGISTRY = Object.freeze([
   Object.freeze({
     id: PUBLIC_ROUTE_ID,
-    availability: 'verified-executable' as const,
+    availability: 'operator-review-required' as const,
     kind: 'fixed-test-terms' as const,
     terms: PUBLIC_ROUTE_TERMS,
     disclosures: Object.freeze({

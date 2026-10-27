@@ -1,4 +1,4 @@
-export type RouteAvailability = 'verified-executable' | 'experimental-disabled' | 'research-only';
+export type RouteAvailability = 'verified-executable' | 'operator-review-required' | 'experimental-disabled' | 'research-only';
 
 export type RouteCapability = {
   id: string;
@@ -22,13 +22,13 @@ export const EXECUTABLE_ROUTE_ID = 'zcash-testnet-to-base-sepolia-fixed' as cons
 export const ROUTE_CAPABILITIES = Object.freeze([
   Object.freeze({
     id: EXECUTABLE_ROUTE_ID,
-    availability: 'verified-executable' as const,
+    availability: 'operator-review-required' as const,
     title: 'Shielded TAZ to Base Sepolia',
-    summary: 'The one end-to-end route implemented and guarded by independent settlement checks.',
+    summary: 'The guarded route is implemented, but requests stay closed until an operator attests current testnet provider readiness.',
     source: Object.freeze({ network: 'Zcash testnet', asset: 'TAZ', privacy: 'Ironwood shielded pool' }),
     destination: Object.freeze({ network: 'Base Sepolia', asset: 'test USDC' }),
-    execution: Object.freeze({ enabled: true as const, amount: '0.01 TAZ', outcome: '1 test USDC', provider: 'trusted-testnet-liquidity-provider' as const, pricing: 'fixed-test-terms' as const }),
-    disclosure: 'Testnet only. Fixed test terms, manual operator approval, temporary provider custody, and no automatic refund.',
+    execution: Object.freeze({ enabled: false as const, amount: '0.01 TAZ', outcome: '1 test USDC', provider: 'trusted-testnet-liquidity-provider' as const, pricing: 'fixed-test-terms' as const }),
+    disclosure: 'Testnet only. Exploration is public; request creation requires an explicit deployment-time readiness attestation. Fixed terms, manual approval, temporary custody, and no automatic refund.',
   }),
   Object.freeze({
     id: 'zcash-mainnet-crosschain-research',
@@ -51,6 +51,15 @@ export const ROUTE_CAPABILITIES = Object.freeze([
     disclosure: 'Disabled until implementation, security review, and independent settlement verification are complete.',
   }),
 ]) satisfies readonly RouteCapability[];
+
+export function routeCapabilitiesForRequestState(requestsEnabled: boolean): RouteCapability[] {
+  return ROUTE_CAPABILITIES.map(route => route.id !== EXECUTABLE_ROUTE_ID || !requestsEnabled ? structuredClone(route) : {
+    ...structuredClone(route),
+    availability: 'verified-executable' as const,
+    summary: 'The guarded testnet request path is open after an explicit operator readiness attestation.',
+    execution: { ...route.execution, enabled: true },
+  });
+}
 
 export function executableRoute() {
   return ROUTE_CAPABILITIES.find(route => route.id === EXECUTABLE_ROUTE_ID)!;

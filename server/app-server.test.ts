@@ -34,7 +34,7 @@ class TestIdentity implements UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined) { return provided === session.csrfToken; }
 }
 
-async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider) {
+async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeRequestsEnabled = true) {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-server-'));
   await mkdir(join(folder, 'assets'));
   await writeFile(join(folder, 'index.html'), '<!doctype html><main>zecathon-production</main>');
@@ -42,6 +42,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: 
   const store = new MemoryPublicOrderRequestStore();
   const server = createApplicationServer({
     store, auth: new TestIdentity(), publicOrigin: 'http://127.0.0.1:8787',
+    routeRequestsEnabled,
     staticDirectory: folder, rateLimit: { windowMs: 60_000, maximum }, agentRateLimit: { windowMs: 60_000, maximum: agentMaximum },
     ...(privy ? { privy, privyAppId: 'public-test-app-id' } : {}), ...(speech ? { speech, speechStatus: speech.status } : {}),
   });
@@ -86,6 +87,24 @@ test('guest exploration stays public while private order creation requires a pas
   }
 });
 
+test('route request creation fails closed without a current operator readiness attestation', async t => {
+  const { base, cookieA } = await fixture(t, 20, 10, undefined, undefined, false);
+  const capabilities = await (await fetch(`${base}/api/v1/capabilities`)).json() as { orderCreation: { enabled: boolean; state: string }; routes: Array<{ id: string; availability: string; execution: { enabled: boolean } }> };
+  assert.deepEqual(capabilities.orderCreation, {
+    enabled: false,
+    state: 'operator-review-required',
+    reason: 'No current provider and signed testnet-path readiness attestation is configured. Exploration and existing history remain available.',
+    binding: 'encrypted-owner-scoped-v2',
+    walletControlVerification: 'required-eip712-eoa',
+  });
+  const route = capabilities.routes.find(item => item.id === 'zcash-testnet-to-base-sepolia-fixed');
+  assert.equal(route?.availability, 'operator-review-required');
+  assert.equal(route?.execution.enabled, false);
+  const response = await fetch(`${base}/api/v1/order-requests`, { method: 'POST', headers: { cookie: cookieA, origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', 'x-csrf-token': csrfA }, body: JSON.stringify(walletIntent) });
+  assert.equal(response.status, 503);
+  assert.match(await response.text(), /ROUTE_OPERATOR_REVIEW_REQUIRED/);
+});
+
 test('handle, contact, request-intent and inbox APIs require account ownership, origin and CSRF', async t => {
   const {base,cookieA,cookieB}=await fixture(t,60);
   const headersA={cookie:cookieA,origin:'http://127.0.0.1:8787','content-type':'application/json','x-csrf-token':csrfA};
@@ -109,7 +128,7 @@ test('Privy stays disabled by default and enabled login/link preserve origin, CS
   const disabledCapabilities = await (await fetch(`${disabled.base}/api/v1/capabilities`)).json() as { authentication: { privy: { enabled: boolean } }; routes: Array<{ availability: string; execution: { enabled: boolean } }>; productCapabilities: Array<{ id: string; status: string; summary: string }> };
   assert.equal(disabledCapabilities.authentication.privy.enabled, false);
   assert.equal(disabledCapabilities.routes.filter(route => route.execution.enabled).length, 1);
-  assert.ok(disabledCapabilities.routes.every(route => ['verified-executable','experimental-disabled','research-only'].includes(route.availability)));
+  assert.ok(disabledCapabilities.routes.every(route => ['verified-executable','operator-review-required','experimental-disabled','research-only'].includes(route.availability)));
   assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'privy-auth')?.status, 'DISABLED');
   assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'live-quotes')?.status, 'DISABLED');
   assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'inbox')?.status, 'EXPERIMENTAL');
