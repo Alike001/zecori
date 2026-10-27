@@ -4,6 +4,8 @@ This is a future approval sequence, not authorization to run it. Commands contai
 
 ## Current findings
 
+- The production procedure remains pinned to the previously reviewed `v0.9.0-rc2` artifact. The zero-budget feasibility review separately checksum-verified `v0.9.0-rc5` and used its walletless `chain-info` probe against candidate upstreams. That does not authorize a production binary upgrade; pin changes require their own compatibility review and operator acceptance. See [zero-budget shielded settlement feasibility](zero-budget-shielded-settlement.md).
+
 - Public request creation is an independent fail-closed gate. Keep it disabled until the operator readiness flag, test-USDC liquidity readiness flag, and a reviewed future fixed-terms deadline are configured together. This does not replace any approval below and does not authorize wallet access or spending.
 
 - Wallet A configuration validation accepts only an existing mode-`0700`, non-symlink data directory with mode-`0600` `default/keys.toml`, testnet loopback RPC at exactly `127.0.0.1:18392`, and never Wallet B's path.
