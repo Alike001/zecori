@@ -50,14 +50,15 @@ try {
   const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
   await send('Page.enable', {}, sessionId); await send('Runtime.enable', {}, sessionId); await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true }, sessionId);
-  await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.zecathonZcashReadOnly={getCapabilities:async()=>({protocol:'zecathon-zcash-readonly-v1',network:'zcash-testnet',pool:'ironwood',readOnly:true})};window.ethereum={request:async({method})=>method==='eth_chainId'?'0x1':[]};` }, sessionId);
+  await send('Page.addScriptToEvaluateOnNewDocument', { source: `window.__noirAuthorized=false;window.__noirListeners=new Map();window.noirwallet={isNoirWallet:true,version:'1.0.40',zcash:{request:async({method})=>{const account={transparent:'private-t-address',shielded:'private-u-address',accounts:[{id:'browser:account',label:'Browser test account',walletId:'browser',accountId:'account',addresses:{transparent:'private-t-address',shielded:'private-u-address'}}]};if(method==='zcash_getAccounts')return window.__noirAuthorized?account:null;if(method==='zcash_requestAccounts'){window.__noirAuthorized=true;return account}if(method==='zcash_getBalance')return{transparent:'0',shielded:'0.02',total:'0.025',available:'0.02',spendable:'0.02',accounts:[{id:'browser:account',walletId:'browser',accountId:'account',synced:true,balance:{transparent:'0',shielded:'0.02',total:'0.025',available:'0.02',spendable:'0.02'}}]};throw new Error('Unexpected Noir method: '+method)},on:(event,listener)=>window.__noirListeners.set(event,listener),removeListener:event=>window.__noirListeners.delete(event)}};window.ethereum={request:async({method})=>method==='eth_chainId'?'0x1':[]};` }, sessionId);
   await send('Page.navigate', { url: origin }, sessionId);
   const evaluate = async expression => { const result = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId); if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? 'Browser evaluation failed'); return result.result.value; };
   const waitFor = async (expression, description) => { for (let attempt = 0; attempt < 100; attempt += 1) { if (await evaluate(expression)) return; await new Promise(resolveWait => setTimeout(resolveWait, 100)); } const state = await evaluate(`({href:location.href,ready:document.readyState,text:document.body?.innerText?.slice(0,800),html:document.documentElement?.outerHTML?.slice(0,500)})`); throw new Error(`Timed out waiting for ${description}: ${JSON.stringify(state)}`); };
   const click = text => evaluate(`(() => { const item=[...document.querySelectorAll('button')].find(node=>node.textContent.includes(${JSON.stringify(text)})); if(!item)return false; item.click(); return true; })()`);
-  const capture = async (name, width, height, mobile) => {
+  const capture = async (name, width, height, mobile, selector) => {
     if (!screenshotDirectory) return;
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, sessionId);
+    if (selector) await send('Runtime.evaluate', { expression: `document.documentElement.style.scrollBehavior='auto';document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'start',behavior:'instant'})` }, sessionId);
     const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sessionId);
     await writeFile(join(screenshotDirectory, name), data, 'base64');
   };
@@ -103,7 +104,7 @@ try {
   await send('Page.navigate', { url: `${origin}/docs/noir-wallet` }, sessionId);
   await waitFor(`document.querySelector('.docs-content h1')?.textContent==='Noir Wallet compatibility'`, 'Noir Wallet MDX documentation');
   const noirDocs = (await evaluate(`document.body.innerText`)).toLowerCase();
-  for (const claim of ['first linked swap remains no-go','zcash_getaccounts','never reuse an existing profile or recovery phrase','disabled']) if (!noirDocs.includes(claim)) throw new Error(`Noir Wallet documentation marker is missing: ${claim}`);
+  for (const claim of ['first linked funded test remains no-go','getaccounts()','never reuse an existing profile or recovery phrase','sending disabled']) if (!noirDocs.includes(claim)) throw new Error(`Noir Wallet documentation marker is missing: ${claim}`);
   await send('Emulation.setLocaleOverride', { locale: 'ar-EG' }, sessionId); await send('Page.addScriptToEvaluateOnNewDocument', { source: `Object.defineProperty(navigator,'language',{configurable:true,get:()=> 'ar-EG'});` }, sessionId); await send('Page.navigate', { url: `${origin}/docs/ai-and-voice` }, sessionId);
   await waitFor(`document.querySelector('.docs-page')?.getAttribute('dir')==='rtl' && document.body.innerText.includes('مراجعة بشرية')`, 'Arabic RTL documentation disclosure');
   const arabicLayout = await evaluate(`({width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth,matrix:document.body.innerText.includes('Saudi Arabic · untested live')})`);
@@ -140,9 +141,15 @@ try {
   if (!productMenu.exists || !productMenu.visible || !productMenu.label?.includes('Menu')) throw new Error(`Mobile product menu is unavailable: ${JSON.stringify(productMenu)}`);
 
   if (!await click('Continue to wallet setup')) throw new Error('Progressive wallet setup action missing');
-  await waitFor(`document.body.innerText.includes('Browser Zcash wallet unavailable')`, 'disabled Zcash browser option');
-  const zcashBrowserDisabled = await evaluate(`[...document.querySelectorAll('button')].find(node=>node.textContent.includes('Browser Zcash wallet unavailable'))?.disabled`);
-  if (!zcashBrowserDisabled) throw new Error('Unapproved Zcash browser wallet option is actionable');
+  await waitFor(`document.body.innerText.includes('Connect Noir Wallet')`, 'explicit Noir connection option');
+  if (!await click('Connect Noir Wallet')) throw new Error('Noir connection action missing');
+  await waitFor(`document.body.innerText.includes('SDK 0.1.9 cannot attest') && document.body.innerText.includes('Shielded') && document.body.innerText.includes('0.02 ZEC')`, 'Noir authorized balance and honest unsupported state');
+  const noirState = await evaluate(`({text:document.body.innerText,authorized:window.__noirAuthorized,sendButtons:[...document.querySelectorAll('button')].filter(node=>/send transaction|send zec/i.test(node.textContent)).length})`);
+  if (!noirState.authorized || noirState.sendButtons !== 0 || !noirState.text.includes('testnet/Ironwood unverified')) throw new Error(`Unsafe or incomplete Noir browser state: ${JSON.stringify(noirState)}`);
+  await capture('noir-wallet-mobile.png', 390, 844, true, '.wallet-grid');
+  await capture('noir-wallet-desktop.png', 1440, 1100, false, '.wallet-grid');
+  await send('Emulation.setDeviceMetricsOverride', { width:390, height:844, deviceScaleFactor:1, mobile:true }, sessionId);
+  await evaluate(`scrollTo(0,0)`);
   if (!await click('Use a manual shielded-source wallet')) throw new Error('Manual shielded-source option missing');
   if (!await click('Check connected Base wallet')) throw new Error('Base wallet option missing');
   await waitFor(`document.body.innerText.includes('Switch the wallet to Base Sepolia')`, 'unsupported Base network rejection');

@@ -1,8 +1,8 @@
-export const meta = { slug: 'noir-wallet', title: 'Noir Wallet compatibility', eyebrow: 'Read-only beta assessment', summary: 'What Noir Wallet v1.0.40 changes, what Zecori can safely test, and why the integration remains unverified.', featureIds: ['noir-wallet', 'fixed-test-route'] }
+export const meta = { slug: 'noir-wallet', title: 'Noir Wallet compatibility', eyebrow: 'Real SDK connection · sending disabled', summary: 'How Zecori detects Noir, restores prior authorization, requests consent, reads private local readiness, and fails closed when testnet or Ironwood cannot be attested.', featureIds: ['noir-wallet', 'fixed-test-route'] }
 
 ## Current assessment
 
-Noir Wallet v1.0.40 Beta is a candidate for Zecori's source-wallet experience, not an approved adapter. The first linked swap remains **NO-GO**. Zecori does not import, unlock, fund, sign with, or broadcast through Noir Wallet.
+Zecori now uses pinned `@noir-wallet/sdk` 0.1.9 to detect Noir Wallet, silently restore only an existing site authorization, request account consent from an explicit Connect click, read the authorized account's local balance summary, and invalidate readiness after an account change or timeout. Wallet data stays in browser memory. The first linked funded test remains **NO-GO**: Zecori does not import, unlock, fund, sign with, or broadcast through Noir Wallet.
 
 <DocNotice title="Testnet build only" tone="safe">
   Noir distributes separate mainnet and testnet extensions. Compatibility work must use the official asset whose filename ends in `-testnet.zip`, loaded into a fresh browser profile with a newly created, unfunded test-only wallet. Never reuse an existing profile or recovery phrase.
@@ -17,13 +17,15 @@ Noir Wallet v1.0.40 Beta is a candidate for Zecori's source-wallet experience, n
 
 The release still excludes cross-restart transaction recovery and automatic resend. A funded Shield Funds stall has not been fully reproduced or verified as resolved.
 
-## Read-only compatibility boundary
+## Implemented connection boundary
 
-Provider detection must not connect an account or open the wallet. An existing authorization may be restored with the silent `getAccounts()` call. Zecori's compatibility probe must not call `connect()`, `getBalance()`, `getAddresses()`, `getMaxTransfer()`, `signMessage()`, `sendTransaction()`, `shieldFunds()`, or `disconnect()`.
+Provider detection uses the SDK's `getNoirWallet()` / `detectProvider()` path and does not connect an account. Startup calls `getAccounts()` silently. It reads `getBalance(account.id)` only when the origin already has authorization. `connect()` runs only from the consumer's Connect click. The integration never calls address enumeration, max transfer, signing, shielding, disconnect, or transaction methods.
 
-Noir v1's silent account response contains addresses and authorized account records, but it does not attest which extension build supplied them. Because network selection is fixed at extension-build time and runtime switching is deprecated, Zecori cannot infer testnet from an address string alone. The production adapter therefore remains unavailable until an isolated testnet package/profile check establishes a trustworthy build identity or another reviewed attestation.
+The pinned SDK exposes `isNoirWallet`, extension `version`, and the Zcash API. The checksum-verified v1.0.40 testnet artifact injects exactly those fields; it does not inject its manifest name, extension ID, network, build digest, or pool. Mainnet and testnet artifacts both report version `1.0.40`. Zecori therefore treats the version as API compatibility evidence only and never derives network or Ironwood from an address.
 
-For that reason, the consumer app now labels browser Zcash wallet access **unavailable** instead of presenting the internal `window.zecathonZcashReadOnly` contract as an operational wallet option. Manual shielded-source instructions remain documented for a future authorized request, but they never appear as a payment action while route requests are closed.
+The Move flow distinguishes shielded total, available total, pending total, synchronization, and insufficiency without storing or transmitting those values. A sufficient-looking balance is provisional because the current SDK result does not provide an Ironwood-specific spendable amount. The browser option therefore reports an honest unsupported configuration and cannot satisfy route readiness. The Base Sepolia connected and manual-recipient paths are unchanged.
+
+A separate review-only payment model binds the order ID, exact `0.01` TAZ amount, dedicated receiver, expiry, destination, provider, and immutable route terms to a future request whose funding source can only be `shielded`. It rejects transparent funding. No wallet method receives this object and the send control is disabled.
 
 ## Safe testnet-only SDK path
 
