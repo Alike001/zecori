@@ -4,12 +4,12 @@ import { join } from 'node:path';
 import { isFullTransactionId } from '../src/lib/order-coordinator.ts';
 import type { ZcashShieldedReceipt } from '../src/lib/read-only-verification.ts';
 import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
+import { assertFreshTestnetZecdChain, type ZecdChainInfo } from './zecd-chain-readiness.ts';
 
 export const ZECD_WALLET_B_RPC = 'http://127.0.0.1:18393/';
 export const ZECD_WALLET_B_DATA = join(homedir(), '.local', 'share', 'zecd-wallet-b-testnet');
 export const ZECD_WALLET_B_NAME = 'default';
 
-type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
 type WalletInfo = { scanning?: false | { progress?: number; pending_enhancements?: number }; enhanced_through?: number | null; import_error?: unknown; txcount?: number; private_keys_enabled?: boolean; unlocked_until?: number };
 type AddressInfo = { address?: string; ismine?: boolean; isvalid_orchard?: boolean; receiver_types?: string[]; receivers_consistent?: boolean; diversifier_index?: number | string };
 type WalletTransaction = { txid?: string; confirmations?: number; blockhash?: string; blockheight?: number; blocktime?: number; details?: HistoryEntry[] };
@@ -44,7 +44,7 @@ export async function walletBRpc(): Promise<RpcCall> {
 
 export async function verifyZcashTransaction(
   request: ZcashVerificationRequest,
-  options: { rpc?: RpcCall } = {},
+  options: { rpc?: RpcCall; now?: number; maximumTipAgeSeconds?: number } = {},
 ): Promise<ZcashShieldedReceipt> {
   if (!isFullTransactionId(request.transactionId) || request.transactionId.startsWith('0x')) throw new Error('Zcash transaction ID must be complete');
   if (!request.receiver.startsWith('utest1')) throw new Error('Receiver is not a Zcash testnet Unified Address');
@@ -53,13 +53,12 @@ export async function verifyZcashTransaction(
   const rpc = options.rpc ?? await walletBRpc();
 
   const [chain, wallet, address, transaction] = await Promise.all([
-    rpc<ChainInfo>('getblockchaininfo'),
+    rpc<ZecdChainInfo>('getblockchaininfo'),
     rpc<WalletInfo>('getwalletinfo'),
     rpc<AddressInfo>('getaddressinfo', [request.receiver]),
     rpc<WalletTransaction>('gettransaction', [request.transactionId]),
   ]);
-  if (chain.chain !== 'test') throw new Error('zecd is not on Zcash testnet');
-  if (chain.initialblockdownload !== false || !Number.isInteger(chain.blocks) || chain.blocks !== chain.headers) throw new Error('zecd chain is not fully synchronized');
+  assertFreshTestnetZecdChain(chain, options.now, options.maximumTipAgeSeconds);
   if (wallet.scanning !== false || wallet.import_error) throw new Error('zecd wallet scan or history enhancement is incomplete');
   if (typeof wallet.enhanced_through !== 'number' || wallet.enhanced_through < (chain.blocks ?? 0)) throw new Error('zecd wallet history is not complete through the chain tip');
   const watchOnly = wallet.private_keys_enabled === false && wallet.unlocked_until === undefined;

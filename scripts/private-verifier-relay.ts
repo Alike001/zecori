@@ -6,15 +6,7 @@ import { PrivateVerificationRelay } from '../server/private-verification-relay.t
 import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
 import { relayFingerprint, signRelayEvidence, verifyRelayChallenge, type RelayEvidencePayload } from '../server/private-verification-protocol.ts';
 import { verifyZcashTransaction } from '../server/zcash-verifier.ts';
-
-function reason(error: unknown): NonNullable<RelayEvidencePayload['reasonCode']> {
-  const message = error instanceof Error ? error.message : '';
-  if (/reorg|canonical/i.test(message)) return 'REORG_DETECTED';
-  if (/sync|history|enhance/i.test(message)) return 'SYNC_INCOMPLETE';
-  if (/not found|missing/i.test(message)) return 'NOT_FOUND';
-  if (/exactly one|ambiguous|match/i.test(message)) return 'EVIDENCE_AMBIGUOUS';
-  return 'RPC_UNAVAILABLE';
-}
+import { classifyZcashVerificationFailure } from '../server/zcash-verification-failure.ts';
 
 requirePrivateRelayTransport();
 const verifierId = process.env.ZECATHON_RELAY_VERIFIER_ID;
@@ -37,7 +29,7 @@ try {
       const evidence = await verifyZcashTransaction(challenge.payload.request);
       payload = { version: 1, jobId: challenge.payload.jobId, verifierId, phase: challenge.payload.phase, nonce: challenge.payload.nonce, orderId: challenge.payload.orderId, manifestFingerprint: challenge.payload.manifestFingerprint, requestFingerprint: relayFingerprint(challenge.payload.request), observedAt: observedAt.toISOString(), expiresAt: expiresAt.toISOString(), outcome: 'VERIFIED', evidence };
     } catch (error) {
-      payload = { version: 1, jobId: challenge.payload.jobId, verifierId, phase: challenge.payload.phase, nonce: challenge.payload.nonce, orderId: challenge.payload.orderId, manifestFingerprint: challenge.payload.manifestFingerprint, requestFingerprint: relayFingerprint(challenge.payload.request), observedAt: observedAt.toISOString(), expiresAt: expiresAt.toISOString(), outcome: 'UNRESOLVED', reasonCode: reason(error) };
+      payload = { version: 1, jobId: challenge.payload.jobId, verifierId, phase: challenge.payload.phase, nonce: challenge.payload.nonce, orderId: challenge.payload.orderId, manifestFingerprint: challenge.payload.manifestFingerprint, requestFingerprint: relayFingerprint(challenge.payload.request), observedAt: observedAt.toISOString(), expiresAt: expiresAt.toISOString(), outcome: 'UNRESOLVED', reasonCode: classifyZcashVerificationFailure(error) };
     }
     const state = await relay.submit(signRelayEvidence(payload, verifierPrivateKey));
     process.stdout.write(`${JSON.stringify({ status: state, jobId: challenge.payload.jobId, verifierId, privateEvidenceDisplayed: false })}\n`);

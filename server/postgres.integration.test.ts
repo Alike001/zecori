@@ -48,9 +48,9 @@ async function reserveTestAllocation(
   return store.reserveDerivedAddress(orderId, operatorId, authorizationId, candidate, now);
 }
 
-function allocationRpc(address: string, index: string, behavior: { derive?: () => void; fail?: Error; wrongIndex?: string } = {}): RpcCall {
+function allocationRpc(address: string, index: string, behavior: { derive?: () => void; fail?: Error; wrongIndex?: string; chainTime?: number } = {}): RpcCall {
   return async <T>(method: string) => {
-    if (method === 'getblockchaininfo') return { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false } as T;
+    if (method === 'getblockchaininfo') return { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: behavior.chainTime ?? Math.floor(Date.now() / 1000), warnings: '' } as T;
     if (method === 'getwalletinfo') return { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 } as T;
     if (method === 'z_listtransactions') return [] as T;
     if (method === 'getaddressinfo') return { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: index } as T;
@@ -277,7 +277,7 @@ test('TEST-ONLY PostgreSQL allocation bridge journals before RPC and recovers ev
     diversifierIndex: expiredIndex, rpc: allocationRpc(expiredAddress, expiredIndex), hooks: { afterDerivedRecord: () => { throw new Error('TEST-ONLY wait past order expiry'); } },
   }), /wait past order expiry/);
   const afterOrderExpiry = expiredOrder.now + 31 * 60_000;
-  await executePostgresAddressAllocation({ store, orderId: expiredOrder.request.id, authorizationId: expiredOrder.authorizationId, operatorId, verifyAuthorization: verify, mode: 'RECONCILE', now: afterOrderExpiry, rpc: allocationRpc(expiredAddress, expiredIndex) });
+  await executePostgresAddressAllocation({ store, orderId: expiredOrder.request.id, authorizationId: expiredOrder.authorizationId, operatorId, verifyAuthorization: verify, mode: 'RECONCILE', now: afterOrderExpiry, rpc: allocationRpc(expiredAddress, expiredIndex, { chainTime: Math.floor(afterOrderExpiry / 1000) }) });
   await assert.rejects(store.publishPaymentInstructions(expiredOrder.request.id, operatorId, afterOrderExpiry), /expired before payment instructions/);
   await store.expire(expiredOrder.request.id, afterOrderExpiry);
   assert.equal((await requests.get(expiredOrder.owner, expiredOrder.request.id))?.status, 'FAILED');

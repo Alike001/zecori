@@ -12,7 +12,7 @@ import { createOperatorOrderBinding } from '../src/lib/operator-order.ts';
 
 const lp = `0x${'1'.repeat(40)}`; const recipient = `0x${'2'.repeat(40)}`;
 function zcashRpc(): RpcCall { return async <T>(method: string) => ({
-  getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
+  getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: Math.floor(Date.now() / 1000), warnings: '' },
   getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 },
 }[method] as T); }
 function baseRpc(usdc = 1_000_000n, eth = 100_000_000_000_000n): RpcCall { return async <T>(method: string) => ({

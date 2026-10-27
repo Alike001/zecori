@@ -7,10 +7,11 @@ import type { RpcCall } from './rpc-client.ts';
 const txid = 'a'.repeat(64);
 const receiver = 'utest1completeshieldedreceiver123456789';
 const blockHash = 'b'.repeat(64);
+const chainTime = Math.floor(Date.now() / 1000);
 
 function rpc(overrides: Record<string, unknown> = {}): RpcCall {
   const values: Record<string, unknown> = {
-    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
+    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'c'.repeat(64), time: chainTime, warnings: '' },
     getwalletinfo: { scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: false },
     getaddressinfo: { address: receiver, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: '42' },
     gettransaction: { txid, confirmations: 12, blockhash: blockHash, blockheight: 489, blocktime: 1_900_000_000, details: [] },
@@ -32,7 +33,8 @@ test('verifies one exact incoming owned Ironwood output in zatoshis', async () =
 test('accepts watch-only custody and rejects wrong network, incomplete sync, unlocked or ambiguous custody, and non-owned receiver', async () => {
   assert.equal((await verifyZcashTransaction(request, { rpc: rpc() })).independentlyVerified, true);
   assert.equal((await verifyZcashTransaction(request, { rpc: rpc({ getwalletinfo: { scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: true, unlocked_until: 0 } }) })).independentlyVerified, true);
-  await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getblockchaininfo: { chain: 'main', blocks: 500, headers: 500, initialblockdownload: false } }) }), /not on Zcash testnet/);
+  await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getblockchaininfo: { chain: 'main', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'c'.repeat(64), time: chainTime } }) }), /not on Zcash testnet/);
+  await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'c'.repeat(64), time: chainTime - 1_801 } }) }), /tip is stale/);
   await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getwalletinfo: { scanning: { progress: 0.9 }, enhanced_through: 400, txcount: 1 } }) }), /incomplete/);
   await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getwalletinfo: { scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: true, unlocked_until: Math.floor(Date.now() / 1000) + 100 } }) }), /remains locked/);
   await assert.rejects(verifyZcashTransaction(request, { rpc: rpc({ getwalletinfo: { scanning: false, enhanced_through: 500, txcount: 1 } }) }), /watch-only or an encrypted/);
