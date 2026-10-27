@@ -1,0 +1,23 @@
+export const meta = { slug: 'handles-contacts', title: 'Handles and private contacts', eyebrow: 'Experimental account feature', summary: 'Optional exact-match handles support private contact and non-paying route-request intents without exposing wallet data.', featureIds: ['handles'] }
+
+## What works
+
+An authenticated account can claim one optional ASCII handle after a fresh sign-in and an exact typed confirmation. Handles are case-insensitively unique, reserved security and brand terms are blocked, lookalike Unicode is rejected, and availability checks are rate-limited without distinguishing reserved names from claimed names.
+
+Renames require the current version and a separate typed confirmation. They are limited to once every 30 days, and the prior name remains quarantined for 90 days. Exact-match discoverability is off by default and requires an explicit opt-in.
+
+## Private contacts
+
+Only an opted-in exact handle can be added. Contact labels are encrypted, lists are owner-scoped, prefix search and public profiles do not exist, and neither wallet addresses nor contact graphs are returned by the API.
+
+## Route-request intent
+
+A saved contact can receive a request for the fixed `0.01 TAZ → 1 test USDC` test route. The recipient can accept or decline the message. This is communication only: it does not create an order, publish a destination, reserve liquidity, authorize a payment, allocate an address, or grant wallet authority.
+
+<DocNotice title="Payment by handle remains disabled" tone="warning">
+  A handle is not a destination address. The existing owner-specific Base recipient proof and immutable destination checks remain mandatory in the guarded order flow. Recipient changes require their own authenticated wallet-control ceremony.
+</DocNotice>
+
+## Privacy and account linking
+
+The handle belongs to Zecori's internal account ID. Passkeys remain the primary account boundary. Privy identities may be linked only through the existing explicit authenticated flow when Privy is securely configured; email, display name, handle, or wallet address never merges accounts automatically.

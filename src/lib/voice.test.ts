@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertSpeechSafeText, VoiceSession, type VoiceAdapter } from './voice.ts';
+import { assertSpeechSafeText, reviewVoiceTranscript, VoiceSession, type VoiceAdapter } from './voice.ts';
 
 function adapter(log: string[]): VoiceAdapter {
   return {
@@ -30,4 +30,12 @@ test('voice stays disabled for an untested provider and blocks private speech pa
   assert.throws(() => assertSpeechSafeText(`source tx ${'a'.repeat(64)}`), /cannot be sent/i);
   assert.throws(() => assertSpeechSafeText('my UFVK is secret'), /cannot be sent/i);
   assert.doesNotThrow(() => assertSpeechSafeText('Your request is awaiting operator review.'));
+});
+
+test('voice transcript review blocks silence, private data, and incorrect financial amounts without granting authority', () => {
+  assert.deepEqual(reviewVoiceTranscript('   '), { safeToPrepare: false, reason: 'empty' });
+  assert.deepEqual(reviewVoiceTranscript(`send to 0x${'1'.repeat(40)}`), { safeToPrepare: false, reason: 'private-data' });
+  assert.deepEqual(reviewVoiceTranscript('Prepare 0.02 TAZ for 2 USDC'), { safeToPrepare: false, reason: 'incorrect-amount' });
+  assert.deepEqual(reviewVoiceTranscript('Prepare 0.01 TAZ for 1 test USDC'), { safeToPrepare: true });
+  assert.deepEqual(reviewVoiceTranscript('Explain the privacy boundary'), { safeToPrepare: true });
 });

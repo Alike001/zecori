@@ -64,7 +64,7 @@ export async function inspectZcashReadOnlyAdapter(adapter: ZcashReadOnlyAdapter 
     if (!raw || typeof raw !== 'object') return { ready: false, code: 'UNSUPPORTED_ADAPTER', message: 'The Zcash adapter returned invalid capabilities.' };
     const capabilities = raw as Partial<ZcashReadOnlyCapabilities>;
     if (capabilities.protocol !== 'zecathon-zcash-readonly-v1' || capabilities.readOnly !== true) {
-      return { ready: false, code: 'UNSUPPORTED_ADAPTER', message: 'This adapter is not approved for read-only Zecathon access.' };
+      return { ready: false, code: 'UNSUPPORTED_ADAPTER', message: 'This adapter is not approved for read-only Zecori access.' };
     }
     if (capabilities.network !== 'zcash-testnet') return { ready: false, code: 'UNSUPPORTED_NETWORK', message: 'Switch the Zcash wallet to testnet. Mainnet is not supported.' };
     if (capabilities.pool !== 'ironwood') return { ready: false, code: 'UNSUPPORTED_POOL', message: 'Only Ironwood shielded source funds are supported.' };

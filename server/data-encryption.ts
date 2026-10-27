@@ -56,9 +56,9 @@ export async function loadEncryptionKeyring(path = process.env.ZECATHON_ENCRYPTI
   const absolute = resolve(path);
   assertOutsideWorkspace(absolute);
   const [file, folder] = await Promise.all([stat(absolute), stat(dirname(absolute))]);
-  const dockerSecret = absolute.startsWith('/run/secrets/');
-  if (!file.isFile() || (dockerSecret ? (file.mode & 0o022) !== 0 : (file.mode & 0o077) !== 0)) throw new Error('Encryption key file must be a private regular file');
-  if (!folder.isDirectory() || (!dockerSecret && (folder.mode & 0o077) !== 0)) throw new Error('Encryption key directory must be mode 0700');
+  const managedSecret = absolute.startsWith('/run/secrets/') || absolute.startsWith('/etc/secrets/');
+  if (!file.isFile() || (managedSecret ? (file.mode & 0o022) !== 0 : (file.mode & 0o077) !== 0)) throw new Error('Encryption key file must be a private regular file');
+  if (!folder.isDirectory() || (!managedSecret && (folder.mode & 0o077) !== 0)) throw new Error('Encryption key directory must be mode 0700');
   const parsed = JSON.parse(await readFile(absolute, 'utf8')) as KeyFile;
   if (!Number.isSafeInteger(parsed.activeVersion) || !parsed.keys || Array.isArray(parsed.keys) || typeof parsed.keys !== 'object') throw new Error('Encryption key file schema is invalid');
   const keys = new Map<number, Buffer>();

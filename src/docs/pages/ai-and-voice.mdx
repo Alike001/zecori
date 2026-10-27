@@ -1,0 +1,33 @@
+export const meta = { slug: 'ai-and-voice', title: 'AI and voice', eyebrow: 'Advisory only', summary: 'Typed, policy-checked explanations and opt-in speech with no transaction authority.', featureIds: ['ai-limited', 'ai-groq', 'voice', 'live-quotes'] }
+
+## Grounded cards
+
+The gateway can return typed cards for route explanation, availability, quote unavailability, review preparation, owner-authorized status, and failure recovery.
+
+## Hard limits
+
+The model cannot choose an unregistered route, invent a quote, create an order, access another account, sign, broadcast, approve a payout, or receive private wallet material.
+
+## Honest examples
+
+Useful questions include “Which route is available?”, “Explain the privacy boundary”, “Prepare the fixed-route review”, and—after sign-in—“What is the status of request &lt;UUID&gt;?”. The review card always says preview only, creates no order, authorizes no payment, and signs no transaction.
+
+## Speech privacy and retention
+
+Recording is opt-in and authenticated. The browser asks for microphone permission only after the disclosure is accepted. Audio is bounded to 30 seconds and 2 MB, held in application memory, forwarded to Groq, zeroed after the response, and never written to application storage. Provider processing and abuse/reliability logging may still apply.
+
+The transcript is always returned for visual review before it can become a bounded assistant question. A transcript, spoken confirmation, or synthesized response never authorizes a payment or substitutes for the destination-proof ceremony.
+
+## Language support
+
+- **English:** partial human-reviewed UI; AI text supported; recognition and output configured but untested live.
+- **French:** partial UI requiring review; AI text supported; recognition configured but untested; text-only output.
+- **Arabic:** partial RTL UI requiring review; AI text supported; recognition and Saudi Arabic output configured but untested live.
+
+Addresses, TAZ, USDC, chain IDs, and transaction hashes are never machine-translated.
+
+## Safe failure behavior
+
+Unsupported routes, wrong amounts, invented prices, missing evidence, cross-account reads, prompt injection, malformed provider data, timeouts, rate limits, silence, and unavailable microphones stop without creating or authorizing a financial action.
+
+No live Groq, microphone, recognition, or TTS success is claimed in Milestone 09C: those checks require separate credentials and explicit human opt-in. Automated evidence uses deterministic providers and malformed/timeout/rate-limit fixtures.

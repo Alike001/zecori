@@ -43,7 +43,7 @@ export function createVerifierServer(expectedToken: string) {
       try {
         const value = await body(request);
         const input = value as Partial<BaseVerificationRequest>;
-        if (typeof input.orderId !== 'string' || typeof input.transactionId !== 'string' || typeof input.recipient !== 'string' || typeof input.amountAtomic !== 'string') throw new Error('Exact order, transaction, recipient, and amount are required');
+        if (typeof input.orderId !== 'string' || typeof input.transactionId !== 'string' || typeof input.recipient !== 'string' || typeof input.amountAtomic !== 'string' || typeof input.expectedSender !== 'string') throw new Error('Exact order, transaction, recipient, amount, and operator-confirmed payout sender are required');
         const evidence = await verifyBaseSepoliaTransaction(input as BaseVerificationRequest);
         return json(response, 200, { evidence });
       } catch (error) { return json(response, 400, { error: { code: 'VERIFICATION_REJECTED', message: error instanceof Error ? error.message : 'Verification rejected' } }); }

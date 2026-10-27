@@ -31,7 +31,7 @@ test('Groq adapter uses the official Responses endpoint and omits unsupported pa
         { id: 'fc_1', type: 'function_call', call_id: 'call_route_1', name: 'get_supported_routes', arguments: '{}' },
       ],
       usage: { input_tokens: 41, output_tokens: 17, total_tokens: 58 },
-    }), { status: 200, headers: { 'x-request-id': 'groq-request-1' } });
+    }), { status: 200, headers: { 'x-request-id': 'groq-request-1', 'x-ratelimit-limit-requests': '1000', 'x-ratelimit-remaining-requests': '999', 'x-ratelimit-limit-tokens': '8000' } });
   }, 256);
 
   const turn = await provider.createTurn(request);
@@ -46,6 +46,15 @@ test('Groq adapter uses the official Responses endpoint and omits unsupported pa
   assert.equal(turn.replay.length, 2);
   assert.equal(turn.providerRequestId, 'groq-request-1');
   assert.deepEqual(turn.usage, { inputTokens: 41, outputTokens: 17, totalTokens: 58 });
+  assert.deepEqual(turn.rateLimits, { limitRequests: '1000', remainingRequests: '999', limitTokens: '8000' });
+});
+
+test('Groq model inventory returns only validated model IDs', async () => {
+  const provider = new GroqResponsesProvider('synthetic-key', undefined, undefined, async input => {
+    assert.equal(String(input), 'https://api.groq.com/openai/v1/models');
+    return new Response(JSON.stringify({ data: [{ id: 'whisper-large-v3-turbo' }, { id: 'openai/gpt-oss-20b' }] }), { status: 200 });
+  });
+  assert.deepEqual(await provider.listAvailableModels(), ['openai/gpt-oss-20b', 'whisper-large-v3-turbo']);
 });
 
 test('Groq continuation replays response items and submits function output without response IDs', async () => {

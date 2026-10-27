@@ -38,7 +38,11 @@ test('completes only after both linked sides and redacts private correlation dat
   assert.equal(completed.status, 'COMPLETED');
   assert.throws(() => completeOrder(completed, receipt.receiptId), /Both independently verified/);
   const shareable = toShareableReceipt(receipt);
-  for (const field of ['sourceTransactionId', 'sourceReceiver', 'orderId', 'destinationTransactionHash', 'verifiedSourceAmount', 'sourceSettlementTimestamp', 'actualKnownFees', 'sourceChain', 'sourceAsset']) assert.equal(field in shareable, false);
+  for (const field of ['sourceTransactionId', 'sourceReceiver', 'orderId', 'destinationTransactionHash', 'verifiedSourceAmount', 'sourceSettlementTimestamp', 'actualKnownFees', 'sourceChain', 'sourceAsset', 'verifiedDestinationAmount', 'destinationSettlementTimestamp']) assert.equal(field in shareable, false);
+  const serialized = JSON.stringify(shareable);
+  assert.doesNotMatch(serialized, /2029-01-01T0[12]:00:00\.000Z|1000000|0\.01/);
+  assert.ok(shareable.redactions.includes('destination amount'));
+  assert.ok(shareable.redactions.includes('destination settlement timestamp'));
   assert.equal(shareable.privacyClassification, 'redacted-shareable');
 });
 

@@ -1,11 +1,13 @@
 import { isDeepStrictEqual } from 'node:util';
 import { PUBLIC_ROUTE_TERMS } from './public-order-store.ts';
+import { EXECUTABLE_ROUTE_ID, ROUTE_CAPABILITIES } from '../src/lib/route-capabilities.ts';
 
-export const PUBLIC_ROUTE_ID = 'zcash-testnet-to-base-sepolia-fixed' as const;
+export const PUBLIC_ROUTE_ID = EXECUTABLE_ROUTE_ID;
 
 export const PUBLIC_ROUTE_REGISTRY = Object.freeze([
   Object.freeze({
     id: PUBLIC_ROUTE_ID,
+    availability: 'operator-review-required' as const,
     kind: 'fixed-test-terms' as const,
     terms: PUBLIC_ROUTE_TERMS,
     disclosures: Object.freeze({
@@ -21,11 +23,12 @@ export const PUBLIC_ROUTE_REGISTRY = Object.freeze([
 export type RegisteredPublicRoute = (typeof PUBLIC_ROUTE_REGISTRY)[number];
 export type SupportedRoutesToolResult = {
   routes: readonly RegisteredPublicRoute[];
+  capabilities: typeof ROUTE_CAPABILITIES;
   liveMarketQuotes: false;
 };
 
 export function supportedRoutesToolResult(): SupportedRoutesToolResult {
-  return structuredClone({ routes: PUBLIC_ROUTE_REGISTRY, liveMarketQuotes: false });
+  return structuredClone({ routes: PUBLIC_ROUTE_REGISTRY, capabilities: ROUTE_CAPABILITIES, liveMarketQuotes: false });
 }
 
 export function validateSupportedRoutesToolResult(value: unknown): SupportedRoutesToolResult {

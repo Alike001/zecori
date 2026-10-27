@@ -35,6 +35,8 @@ export type ShareableReceipt = Omit<FinalReceipt,
   | 'actualKnownFees'
   | 'sourceChain'
   | 'sourceAsset'
+  | 'verifiedDestinationAmount'
+  | 'destinationSettlementTimestamp'
 > & {
   orderReference: string;
   privacyClassification: 'redacted-shareable';
@@ -79,6 +81,8 @@ export function toShareableReceipt(receipt: FinalReceipt): ShareableReceipt {
     actualKnownFees: _actualKnownFees,
     sourceChain: _sourceChain,
     sourceAsset: _sourceAsset,
+    verifiedDestinationAmount: _verifiedDestinationAmount,
+    destinationSettlementTimestamp: _destinationSettlementTimestamp,
     ...safe
   } = receipt;
   return {
@@ -88,7 +92,7 @@ export function toShareableReceipt(receipt: FinalReceipt): ShareableReceipt {
     redactions: [
       'source transaction ID', 'destination transaction ID', 'shielded receiver address',
       'internal order/correlation ID', 'shielded source amount', 'shielded settlement timestamp', 'transaction fees',
-      'source chain and asset',
+      'source chain and asset', 'destination amount', 'destination settlement timestamp',
     ],
   };
 }

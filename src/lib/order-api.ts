@@ -1,4 +1,6 @@
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
+import type { AgentFactCard } from './agent-cards.ts';
+export type { AgentFactCard } from './agent-cards.ts';
 
 export type PublicRouteTerms = {
   source: { network: 'zcash-testnet'; asset: 'TAZ'; pool: 'ironwood'; amountZatoshis: '1000000'; amount: '0.01'; confirmations: 10 };
@@ -16,6 +18,7 @@ export type PublicOrderRequest = {
   expiresAt: string;
   destinationBinding: { status: 'confirmed' | 'bound' | 'expired' | 'revoked' | 'legacy-unverified'; consentConfirmedAt?: string; walletControlVerification: 'unverified' | 'verified-eoa' | 'verified-erc1271'; verifiedAt?: string };
   terms: PublicRouteTerms;
+  destinationReview?: { recipient: string; network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; contract: string; amountAtomic: '1000000' };
   linkedOrderId?: string;
   paymentInstructions?: { receiver: string; expiresAt: string };
   order?: { finalReceiptId?: string; resolutionReason?: string };
@@ -48,12 +51,25 @@ export type PublicCapabilities = {
   routeId: 'zcash-testnet-to-base-sepolia-fixed';
   classification: 'fixed-test-terms';
   route: PublicRouteTerms;
-  orderCreation: { enabled: true; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-or-erc1271' };
+  routes: import('./route-capabilities.ts').RouteCapability[];
+  destinations: import('./destination-capabilities.ts').DestinationCapability[];
+  productCapabilities: import('./product-capabilities.ts').ProductCapability[];
+  authentication: { passkeys: true; guestExploration: true; privy: { enabled: boolean; appId?: string; loginMethods?: string[]; embeddedWalletCreation?: false; delegatedActions?: false; serverSigning?: false } };
+  orderCreation: { enabled: boolean; state: 'operator-attested-ready'|'operator-review-required'; reason: string; readiness: import('./route-capabilities.ts').RouteReadiness; binding: 'encrypted-owner-scoped-v2'; walletControlVerification: 'required-eip712-eoa'|'required-eip712-or-erc1271' };
   wallets: {
     zcash: { network: 'zcash-testnet'; pool: 'ironwood'; connectedMode: 'read-only-capability-check'; externalMode: true };
     base: { network: 'base-sepolia'; chainId: 84532; contract: string; connectedMode: 'user-initiated-eip712'; manualRecipient: true; addressIntentConfirmation: true; walletControlVerified: true; supportedProofs: string[] };
   };
   agent: { mode: 'model-backed' | 'limited'; provider?: string; model?: string; reason?: string; externalRequestsApproved: boolean; limits: { maxOutputTokens: number; maxProviderCalls: number }; dataHandling?: { responseStorageControl: 'request-disabled' | 'provider-default'; retentionNotice: string } };
+  voice: {
+    enabled: boolean; provider: 'groq'; reason?: string; externalRequestsApproved: boolean; liveValidated: boolean;
+    transcription: { model: 'whisper-large-v3-turbo'; locales: readonly ['en','fr','ar']; providerDocumentationVerified: true };
+    synthesis: { locales: readonly ['en','ar']; models: { en: 'canopylabs/orpheus-v1-english'; ar: 'canopylabs/orpheus-arabic-saudi' }; providerDocumentationVerified: true };
+    limits: { maximumAudioBytes: number; maximumDurationMs: number; minimumDurationMs: number; maximumSpeechCharacters: number };
+    retention: 'memory-only-until-provider-response';
+  };
+  social: { handles: true; privateContacts: true; handleRequestIntents: true; paymentByHandle: false; publicDirectory: false };
+  notifications: { inApp: true; transactionalOutbox: true; externalChannels: false };
 };
 
 export type AgentReply = {
@@ -63,19 +79,12 @@ export type AgentReply = {
   toolsUsed: string[];
   providerCalls: number;
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
+  providerRateLimits?: { limitRequests?: string; remainingRequests?: string; limitTokens?: string; remainingTokens?: string; resetRequests?: string; resetTokens?: string };
   refusal?: true;
-  failureCode?: 'input-policy' | 'provider-response' | 'tool-authorization' | 'tool-output-boundary' | 'model-output-rejected' | 'provider-call-limit';
+  failureCode?: 'input-policy' | 'provider-response' | 'provider-rate-limit' | 'provider-timeout' | 'tool-authorization' | 'tool-output-boundary' | 'model-output-rejected' | 'provider-call-limit';
+  retryAfterSeconds?: number;
   publicRouteDiagnostic?: { failedRule: string; extractedFacts: { tazAmounts: string[]; usdcAmounts: string[]; exactFixedPricing: boolean; routeId?: string; routeIds: string[]; providerIds: string[]; destinationChainIds: string[]; mentionsBaseSepolia: boolean; statesNoLiveMarketQuote: boolean; statesNoSpendingAuthority: boolean; unsupportedNetworkClaims: string[] }; sanitizedModelResponse: string };
   factCards?: AgentFactCard[];
-};
-
-export type AgentFactCard = {
-  kind: 'supported-route'; routeId: 'zcash-testnet-to-base-sepolia-fixed'; classification: 'fixed-test-terms';
-  source: { network: 'zcash-testnet'; asset: 'TAZ'; amount: '0.01'; amountZatoshis: '1000000'; pool: 'ironwood' };
-  destination: { network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; amount: '1'; amountAtomic: '1000000'; contract: string };
-  provider: { id: string; model: 'trusted-liquidity-provider' };
-  pricing: { description: string; sourceAtomicUnits: string; destinationAtomicUnits: string };
-  disclosures: { testOnly: true; liveMarketQuote: false; spendingAuthority: false; createsOrder: false; authorizesPayment: false };
 };
 
 let csrfToken: string | undefined;
@@ -106,6 +115,29 @@ async function post<T>(path: string, body: unknown, token?: string): Promise<T> 
   return parse<T>(await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...(token ? { 'x-csrf-token': token } : {}) }, body: JSON.stringify(body) }));
 }
 
+async function mutate<T>(method: 'PUT'|'PATCH'|'DELETE', path: string, body: unknown): Promise<T> {
+  return parse<T>(await fetch(path,{method,credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':await csrf()},body:JSON.stringify(body)}));
+}
+
+export type AccountHandle={handleId:string;handle:string;normalizedHandle:string;status:'ACTIVE'|'LOCKED'|'RETIRED';discoverable:boolean;version:number;claimedAt:string;updatedAt:string;renameAvailableAt?:string};
+export type PrivateContact={contactId:string;handle:string;label:string;status:'ACTIVE';updatedAt:string};
+export type HandleRequestIntent={intentId:string;direction:'incoming'|'outgoing';counterpartyHandle:string;routeId:'zcash-testnet-to-base-sepolia-fixed';status:'REQUESTED'|'ACCEPTED'|'DECLINED'|'CANCELLED'|'EXPIRED';createdAt:string;expiresAt:string};
+export type InboxItem={inboxItemId:string;category:'ORDER'|'HANDLE'|'REQUEST';titleKey:string;bodyVariables:Record<string,string>;requestId?:string;createdAt:string;read:boolean};
+export type InboxPage={items:InboxItem[];unreadCount:number;nextCursor?:string};
+export async function getAccountHandle(){return(await parse<{handle?:AccountHandle}>(await fetch('/api/v1/account/handle',{credentials:'same-origin'}))).handle}
+export async function checkHandleAvailability(candidate:string){return post<{available:boolean}>('/api/v1/handles/availability',{candidate},await csrf())}
+export async function saveAccountHandle(candidate:string,expectedVersion:number,confirmation:string){return(await mutate<{handle:AccountHandle}>('PUT','/api/v1/account/handle',{candidate,expectedVersion,confirmation})).handle}
+export async function setHandleDiscoverability(discoverable:boolean,expectedVersion:number,confirmation:string){return(await mutate<{handle:AccountHandle}>('PATCH','/api/v1/account/handle/discoverability',{discoverable,expectedVersion,confirmation})).handle}
+export async function listContacts(){return(await parse<{contacts:PrivateContact[]}>(await fetch('/api/v1/contacts',{credentials:'same-origin'}))).contacts}
+export async function addContact(handle:string,label:string){return(await post<{contact:PrivateContact}>('/api/v1/contacts',{handle,label},await csrf())).contact}
+export async function removeContact(contactId:string){await mutate('DELETE',`/api/v1/contacts/${encodeURIComponent(contactId)}`,{})}
+export async function listHandleRequests(){return(await parse<{requests:HandleRequestIntent[]}>(await fetch('/api/v1/handle-requests',{credentials:'same-origin'}))).requests}
+export async function createHandleRequest(contactId:string){return(await post<{request:HandleRequestIntent}>('/api/v1/handle-requests',{contactId,confirmation:'REQUEST FIXED TEST ROUTE'},await csrf())).request}
+export async function respondHandleRequest(intentId:string,action:'ACCEPT'|'DECLINE'){return(await post<{request:HandleRequestIntent}>(`/api/v1/handle-requests/${encodeURIComponent(intentId)}/respond`,{action,confirmation:action==='ACCEPT'?'ACCEPT REQUEST — NO PAYMENT':'DECLINE REQUEST'},await csrf())).request}
+export async function getInbox(filters:{unreadOnly?:boolean;category?:string}={}){const query=new URLSearchParams();if(filters.unreadOnly)query.set('unread','1');if(filters.category)query.set('category',filters.category);return parse<InboxPage>(await fetch(`/api/v1/inbox${query.size?`?${query}`:''}`,{credentials:'same-origin'}))}
+export async function setInboxItemRead(id:string,read:boolean){await post(`/api/v1/inbox/${encodeURIComponent(id)}/${read?'read':'unread'}`,{},await csrf())}
+export async function markAllInboxRead(){return post<{updated:number}>('/api/v1/inbox/read-all',{},await csrf())}
+
 export async function registerPasskey(displayName: string, passkeyLabel: string, adding = false): Promise<void> {
   const token = adding ? await csrf() : undefined;
   const ceremony = await post<{ challengeId: string; passkeyLabel: string; options: Parameters<typeof startRegistration>[0]['optionsJSON'] }>('/api/v1/auth/register/options', { displayName, passkeyLabel }, token);
@@ -123,6 +155,19 @@ export async function loginWithPasskey(): Promise<void> {
 
 export async function logout(): Promise<void> {
   await post('/api/v1/auth/logout', {}, await csrf()); csrfToken = undefined;
+}
+
+export async function loginWithPrivy(accessToken: string): Promise<void> {
+  await postWithBearer('/api/v1/auth/privy/login', accessToken);
+  csrfToken = undefined;
+}
+
+export async function linkPrivy(accessToken: string): Promise<{ linked: true; alreadyLinked: boolean }> {
+  return postWithBearer('/api/v1/auth/privy/link', accessToken, await csrf());
+}
+
+async function postWithBearer<T>(path: string, accessToken: string, token?: string): Promise<T> {
+  return parse<T>(await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}`, ...(token ? { 'x-csrf-token': token } : {}) }, body: '{}' }));
 }
 
 export async function getCapabilities(): Promise<PublicCapabilities> {
@@ -169,4 +214,26 @@ export async function sendAgentMessage(message: string, locale: 'en' | 'fr' | 'a
     headers: { 'content-type': 'application/json', ...(csrfToken ? { 'x-csrf-token': csrfToken } : {}) },
     body: JSON.stringify({ message, locale }),
   }))).reply;
+}
+
+export async function transcribeVoice(audio: Blob, durationMs: number, locale: 'en' | 'fr' | 'ar'): Promise<string> {
+  const response = await fetch('/api/v1/voice/transcriptions', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': audio.type || 'audio/webm', 'x-csrf-token': await csrf(), 'x-voice-consent': 'audio-processing-and-retention-accepted', 'x-speech-locale': locale, 'x-audio-duration-ms': String(Math.round(durationMs)) },
+    body: audio,
+  });
+  return (await parse<{ transcript: string; canAuthorizePayment: false }>(response)).transcript;
+}
+
+export async function synthesizeVoice(text: string, locale: 'en' | 'ar'): Promise<Blob> {
+  const response = await fetch('/api/v1/voice/speech', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'content-type': 'application/json', 'x-csrf-token': await csrf(), 'x-voice-consent': 'audio-processing-and-retention-accepted' },
+    body: JSON.stringify({ text, locale }),
+  });
+  if (!response.ok) {
+    const value = await response.json() as { error?: { message?: string } };
+    throw new Error(value.error?.message ?? 'Voice output failed');
+  }
+  return response.blob();
 }

@@ -15,6 +15,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import type { Hex } from 'viem';
 import { BaseSepoliaWalletControlVerifier, type WalletControlRpc } from './wallet-control.ts';
 import { PostgresDestinationWalletControl } from './destination-wallet-control-store.ts';
+import { normalizeEvmAddress } from '../src/lib/evm-address.ts';
 
 const databaseUrl = process.env.POSTGRES_TEST_URL;
 async function ensureUser(pool: ReturnType<typeof createPostgresPool>, ownerId: string): Promise<void> {
@@ -158,6 +159,7 @@ test('TEST-ONLY two accounts retain distinct immutable encrypted destinations ac
   });
   await assert.rejects(pool.query(`UPDATE public_order_requests SET owner_user_id=$2 WHERE request_id=$1`, [requestA.id, ownerB]), /foreign key|constraint/i);
   assert.equal((await store.get(ownerA, requestA.id))?.paymentInstructions, undefined, 'acceptance alone cannot publish a payment receiver');
+  assert.equal((await store.get(ownerA, requestA.id))?.destinationReview, undefined, 'the exact recipient stays encrypted until payment instructions are published');
   const restartedPool = createPostgresPool(databaseUrl); const restarted = new PostgresPublicOrderRequestStore(restartedPool, encryption);
   assert.equal((await restarted.get(ownerA, requestA.id))?.destinationBinding.status, 'bound'); await restartedPool.end();
 });
@@ -184,7 +186,7 @@ test('TEST-ONLY production lifecycle is concurrent-safe, encrypted, owner-scoped
   await settlements.publishPaymentInstructions(request.id, 'operator-integration');
   const sourceTransactionId = testOnlyTransaction('source-replay', request.id);
   const ownerView = await requests.get(owner, request.id); const strangerView = await requests.get(stranger, request.id);
-  assert.equal(ownerView?.paymentInstructions?.receiver, candidate.address); assert.equal(strangerView, undefined);
+  assert.equal(ownerView?.paymentInstructions?.receiver, candidate.address); assert.equal(ownerView?.destinationReview?.recipient, normalizeEvmAddress(recipient)); assert.equal(strangerView, undefined);
   assert.ok(ownerView?.timeline?.some(item => item.type === 'PAYMENT_INSTRUCTIONS_PUBLISHED'));
   const raw = await pool.query<{ encrypted_private_state: Buffer; encrypted_payment_receiver: Buffer }>(`SELECT o.encrypted_private_state,r.encrypted_payment_receiver FROM orders o JOIN public_order_requests r ON r.request_id=o.order_id WHERE o.order_id=$1`, [request.id]);
   assert.ok(!raw.rows[0].encrypted_private_state.toString().includes(candidate.address)); assert.ok(!raw.rows[0].encrypted_payment_receiver.toString().includes(candidate.address));

@@ -12,6 +12,9 @@ const branch = run('git', ['branch', '--show-current']);
 check('git-main', branch.status === 0 && branch.stdout.trim() === 'main', branch.stdout.trim() || branch.stderr.trim());
 const status = run('git', ['status', '--porcelain']);
 check('git-clean', status.status === 0 && status.stdout.trim() === '', status.stdout.trim() ? 'working tree has changes' : 'clean');
+const revision = run('git', ['rev-parse', 'HEAD']);
+const vcsRef = revision.status === 0 && /^[0-9a-f]{40}$/.test(revision.stdout.trim()) ? revision.stdout.trim() : '';
+check('vcs-ref', Boolean(vcsRef), vcsRef || 'HEAD did not resolve to an exact 40-character revision');
 
 const [compose, dockerignore, publicApi, verifier, keyring, agentProvider, agentGateway, agentTools, walletControl, walletControlMigration] = await Promise.all([
   readFile('compose.yaml', 'utf8'), readFile('.dockerignore', 'utf8'), readFile('server/public-api.ts', 'utf8'),
@@ -26,13 +29,14 @@ check('watch-only-custody-gate', verifier.includes('private_keys_enabled === fal
 check('aes-256-gcm-keyring', keyring.includes("createCipheriv('aes-256-gcm'") && keyring.includes('activeVersion'), 'Versioned AES-256-GCM keyring is enforced');
 check('destination-control-proof-gate', walletControl.includes('recoverTypedDataAddress') && walletControl.includes('ERC1271_MAGIC') && walletControlMigration.includes('destination_wallet_proofs') && publicApi.includes('destination-challenges'), 'EIP-712/1271 verification and durable single-use proof routes are present');
 check('eoa-only-first-release', compose.includes('ZECATHON_ERC1271_ENABLED: "0"') && walletControl.includes('CONTRACT_WALLET_DISABLED'), 'Contract-wallet execution defaults to disabled until live validation');
+check('webauthn-rp-id', compose.includes('WEBAUTHN_RP_ID: ${DOMAIN}'), 'WebAuthn RP ID is explicitly bound to the public hostname');
 check('ai-explicit-charge-opt-in', agentProvider.includes('I_APPROVE_CHARGEABLE_MODEL_REQUESTS') && agentProvider.includes('externalRequestsApproved: false'), 'External model calls require explicit operator opt-in');
 check('ai-stateless-bounded-responses', agentProvider.includes('body.store = false') && agentProvider.includes('max_output_tokens') && agentProvider.includes('AbortSignal.timeout(20_000)') && agentProvider.includes('parallel_tool_calls: false'), 'OpenAI storage is disabled and all Responses requests are bounded, timed out, and serial');
 check('ai-groq-provider-boundary', agentProvider.includes("id: 'groq-responses'") && agentProvider.includes("includeStoreFalse: false") && agentProvider.includes("'https://api.groq.com/openai/v1'") && agentProvider.includes("model !== 'openai/gpt-oss-20b'"), 'Groq uses the reviewed endpoint/model and omits its unsupported store parameter');
 check('ai-tool-authorization', agentTools.includes('authenticated(context)') && agentTools.includes('additionalProperties: false') && !/(approve_payout|sign_transaction|broadcast_transaction)/.test(agentTools.split('export const AGENT_TOOLS')[1]?.split('];')[0] ?? ''), 'Agent tools are schema-checked and exclude payment operations');
 check('ai-private-input-boundary', agentGateway.includes('SENSITIVE_INPUT') && agentGateway.includes('maxToolOutputBytes'), 'Private-shaped input and oversized tool output are blocked');
 
-const composeCheck = run('docker', ['compose', 'config', '--quiet'], { ...process.env, DOMAIN: process.env.DOMAIN || 'preflight.invalid', BASE_SEPOLIA_RPC_URL: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' });
+const composeCheck = run('docker', ['compose', 'config', '--quiet'], { ...process.env, DOMAIN: process.env.DOMAIN || 'preflight.invalid', VCS_REF: process.env.VCS_REF || vcsRef, BASE_SEPOLIA_RPC_URL: process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org' });
 check('compose-config', composeCheck.status === 0, composeCheck.status === 0 ? 'valid' : (composeCheck.stderr.trim() || 'docker compose unavailable'));
 
 async function secret(name, path, validator) {

@@ -55,6 +55,7 @@ export type BaseVerificationRequest = {
   transactionId: string;
   recipient: string;
   amountAtomic: string;
+  expectedSender: string;
   minimumConfirmations?: number;
 };
 
@@ -83,6 +84,7 @@ export async function verifyBaseSepoliaTransaction(
   if (!options.allowHistoricalReference && request.transactionId.toLowerCase() === BASE_REFERENCE_TRANSACTION) {
     throw new Error('Historical reference transaction cannot settle an order');
   }
+  if (!isFullEvmAddress(request.expectedSender)) throw new Error('Operator-confirmed payout sender is required');
 
   const rpc = options.rpc ?? baseSepoliaRpc();
   const chainId = quantity(await rpc<string>('eth_chainId'), 'chain ID');
@@ -108,6 +110,7 @@ export async function verifyBaseSepoliaTransaction(
   if (confirmations < minimum) throw new Error(`Insufficient confirmations: ${confirmations}/${minimum}`);
 
   const recipient = request.recipient.toLowerCase();
+  const sender = request.expectedSender.toLowerCase();
   const amount = BigInt(request.amountAtomic);
   const matching = (receipt.logs ?? []).filter(log =>
     log.removed !== true
@@ -116,6 +119,7 @@ export async function verifyBaseSepoliaTransaction(
     && log.blockHash?.toLowerCase() === receipt.blockHash?.toLowerCase()
     && log.topics?.length === 3
     && log.topics[0]?.toLowerCase() === ERC20_TRANSFER_TOPIC
+    && topicAddress(log.topics[1]) === sender
     && topicAddress(log.topics[2]) === recipient
     && logAmount(log.data) === amount
   );

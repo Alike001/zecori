@@ -31,6 +31,7 @@ jobs:
           node-version: 24.14.1
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm docs:validate
       - run: pnpm test
       - run: pnpm test:postgres
         env:
@@ -39,4 +40,4 @@ jobs:
       - run: pnpm build
       - run: pnpm privacy:scan
       - run: pnpm security:gate
-      - run: docker build -t zecathon:${{ github.sha }} .
+      - run: docker build --build-arg VCS_REF=${{ github.sha }} -t zecathon:${{ github.sha }} .

@@ -1,0 +1,17 @@
+export const meta = { slug: 'api-architecture', title: 'API and architecture', eyebrow: 'System map', summary: 'One public API, PostgreSQL authority, isolated verification, and shared capability registries.', featureIds: ['guest-exploration', 'order-lifecycle', 'ai-limited'] }
+
+## Public boundary
+
+`/api/v1` exposes capabilities, authentication, owner-scoped requests, destination challenges, receipts, optional handles, private contacts, route-request intents, an owner-scoped inbox, and the advisory agent. Mutations require same-origin CSRF protection and account ownership. Unsupported operations return 404.
+
+## Data authority
+
+PostgreSQL owns users, sessions, requests, immutable manifests, encrypted evidence, identity links, receipts, handles, encrypted contact labels, intent state, the transactional outbox, inbox read state, and append-only delivery history.
+
+## Notification consistency
+
+Order/account mutations and their outbox records commit together. Workers use leased `FOR UPDATE SKIP LOCKED` rows, idempotent inbox inserts, retry metadata, and dead-letter outcomes. The final-success item is based on receipt insertion, not an optimistic order label.
+
+## Capability truth
+
+The frontend, API, docs, and assistant derive route and product claims from typed registries. Tests reject unknown statuses and fabricated live claims. MDX owns prose and structure; the React shell still injects canonical capability badges, route registry entries, and evidence matrices.

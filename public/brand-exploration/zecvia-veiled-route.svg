@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 240" role="img" aria-labelledby="title desc">
+  <title id="title">Zecvia provisional Veiled Route mark</title><desc id="desc">A Z-shaped route crossing a circular boundary, with gold source and cyan evidence nodes.</desc>
+  <rect width="320" height="240" rx="24" fill="#080b10"/><circle cx="160" cy="112" r="72" fill="none" stroke="#f4f0e8" stroke-width="8" stroke-dasharray="188 28"/>
+  <path d="M106 70h108l-108 84h108" fill="none" stroke="#f4f0e8" stroke-width="18" stroke-linejoin="bevel"/>
+  <circle cx="102" cy="158" r="10" fill="#f4b728"/><circle cx="218" cy="67" r="10" fill="#72d8e8"/>
+  <text x="160" y="216" text-anchor="middle" fill="#f4f0e8" font-family="system-ui,sans-serif" font-size="20" font-weight="700">ZECVIA</text>
+</svg>

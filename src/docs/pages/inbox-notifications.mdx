@@ -1,0 +1,19 @@
+export const meta = { slug: 'inbox-notifications', title: 'Inbox and notifications', eyebrow: 'Committed events only', summary: 'A durable owner-scoped inbox is produced from committed account and order events through a transactional outbox.', featureIds: ['inbox', 'email-notifications'] }
+
+## What works
+
+PostgreSQL writes account or order state and its notification event in the same transaction. A restart-safe worker leases pending outbox rows, creates an idempotent in-app item, records delivery attempts, and safely replays expired leases. Unknown or privacy-invalid events are dead-lettered instead of displayed.
+
+The inbox supports unread and read state, mark-all-read, category filters, persistence across restarts, and owner-scoped access. Empty, loading, sign-in-required, and error states are visible in the product.
+
+## Honest completion language
+
+An order status alone does not produce a success message. The “verified final receipt” notification is emitted only when a genuine receipt row is committed. Detection, confirmation, payout submission, refund review, failure, unresolved, expiry, and cancellation each retain distinct wording.
+
+## Redaction boundary
+
+Inbox payloads reject wallet addresses, recipients, signatures, transaction hashes, transaction IDs, and email addresses. The item may link the owner back to private activity, where normal authorization runs again.
+
+<DocNotice title="External alerts remain disabled" tone="warning">
+  Email, push, SMS, webhooks, and public notification feeds are not implemented. No private transaction data is sent to an external alert provider.
+</DocNotice>
