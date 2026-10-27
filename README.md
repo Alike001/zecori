@@ -2,44 +2,125 @@
 
 **Private origin. Verified arrival.**
 
-Zecori is an original, privacy-first application for one explicitly constrained cross-chain test route. The name is provisional; repository paths, package identifiers, environment-variable prefixes, and database names remain unchanged.
+Zecori is a privacy-first prototype for moving value from a shielded Zcash source to another chain without pretending that the whole journey is private or trustless. It explores one deliberately constrained testnet route: a shielded Zcash payment followed by an operator-approved test-USDC payout on Base Sepolia.
 
-- Source: exactly `0.01 TAZ` (`1,000,000` zatoshis) on Zcash testnet, Ironwood shielded.
-- Destination: exactly `1 test USDC` (`1,000,000` atomic units) on Base Sepolia (`84532`).
-- Token: Circle test-USDC at `0x036CbD53842c5426634e7929541eC2318f3dCF7e`.
-- Provider: trusted testnet liquidity provider with separate manual payout approval.
-- Rate: fixed test rate, not a market quote.
+The product is designed to make privacy boundaries, custody, readiness, and settlement evidence visible. It never asks a browser user for a seed phrase or private key, and the public application cannot unlock a wallet, sign or broadcast a transaction, approve a payout, or declare settlement complete.
 
-The application does not offer mainnet execution, automatic payouts, trustless settlement, or automatic refunds. It never asks a browser user for a seed phrase or private key.
+![Zecori home screen](docs/screenshots/zecori-home-dark.png)
 
-## Current implementation
+## Current status
 
-The responsive public homepage explains the product, route availability, custody and recovery boundaries without requiring login. Visitors can explore every declared route; only the exact `0.01 TAZ -> 1 test USDC` test route is executable. Passkeys protect private history, tracking, and receipts. A financial request becomes operator-eligible only after an explicit EIP-712 or ERC-1271 destination-control proof; unverified destinations remain clearly labeled and blocked. Existing authenticated orders show genuine backend lifecycle state and reveal encrypted-at-rest payment instructions only after validated durable allocation.
+This README describes the repository at commit `0cfb801`.
 
-Optional Google and email sign-in through Privy remains disabled. Its server verifier maps opaque subjects to the existing internal UUID account model and has no wallet authority, but the reviewed submission bundle compiles out the Privy React path because its transitive client graph has unresolved advisories. The SDK is build-only and absent from the production dependency tree and image; re-enabling it requires a clean upstream graph, a reviewed build change, and live tenant acceptance. Existing passkeys remain supported.
+| Area | Verified state |
+| --- | --- |
+| Product and route lifecycle | Implemented and locally tested |
+| Route request creation | Disabled by default; requires current operator, liquidity, and fixed-term attestations |
+| Linked funded Zcash-to-Base settlement | **Not performed or verified** |
+| Public deployment | **Not deployed or verified** |
+| Mainnet or additional chains | **Not supported** |
+| Demo and video | No verified public demo or video URL is available |
 
-The product now includes a navigable MDX documentation site at `/docs/getting-started`, a shared feature-truth matrix, and product navigation for Routes, Account, Activity, Inbox, and the advisory AI assistant. Settings remains clearly planned.
+The only implemented financial route is:
 
-Milestone 09C adds experimental optional handles with typed confirmation, exact-match opt-in discovery, encrypted owner-only contacts, non-paying fixed-route request intents, and a durable owner-scoped in-app inbox backed by a PostgreSQL transactional outbox. Handles never resolve to wallet addresses or bypass destination proof; payment-by-handle and every external notification channel remain disabled. See [handles and private contacts](src/docs/pages/handles-contacts.mdx), [inbox and notifications](src/docs/pages/inbox-notifications.mdx), the [handle/contact design](docs/handles-and-contacts-plan.md), [notification design](docs/notifications-plan.md), and [AI route contract](docs/ai-route-integration-contract.md).
+- **Source:** exactly `0.01 TAZ` (`1,000,000` zatoshis) from the Zcash testnet Ironwood shielded pool.
+- **Destination:** exactly `1 test USDC` (`1,000,000` atomic units) on Base Sepolia, chain ID `84532`.
+- **Token contract:** Circle test-USDC at `0x036CbD53842c5426634e7929541eC2318f3dCF7e`.
+- **Terms:** a fixed integration-test outcome, not a market quote or liquidity promise.
+- **Provider model:** an experimental trusted testnet liquidity provider with temporary custody and separate manual payout approval.
 
-Milestone 08C added deterministic multilingual route/review/status guidance, an authenticated opt-in Groq speech gateway with transcript correction and text fallback, `/docs/ai-and-voice`, an evidence-status roadmap, and an earlier Zecvia identity study retained as provenance. Milestone 08D provisionally adopts Zecori across the active product. See the [Milestone 08C review report](docs/milestone-08c-review-ready.md), [AI and voice boundaries](docs/ai-and-voice.md), [Zecori brand guidelines](docs/zecori-brand-guidelines.md), and [08D submission readiness](docs/milestone-08d-review-ready.md).
+Do not send funds based on this repository or an unverified deployment. Payment instructions are designed to appear only after an authenticated request, destination proof, operator acceptance, and validated receiver allocation.
 
-Milestone 09B moves the in-app manual to build-time MDX with reviewed local React components and adds explicit wallet onboarding, Noir Wallet compatibility, mainnet/security, roadmap, and judge evidence routes. Noir Wallet v1.0.40 remains disabled pending an isolated, checksum-verified testnet extension acceptance; the prepared probe calls only silent `zcash_getAccounts`. See the [Noir compatibility assessment](docs/noir-wallet-v1.0.40-compatibility.md). No external agent skill or automatic installer was added; the [skill evaluation](docs/ai-skill-evaluation.md) records source and privilege boundaries.
+## How the guarded workflow works
 
-The standalone Node server provides:
+1. A visitor reviews the exact route, privacy boundary, custody model, and current readiness without signing in.
+2. The user signs in with a passkey and explicitly confirms a Base Sepolia recipient.
+3. A purpose-limited EIP-712 signature proves control of the destination address. It cannot spend tokens or authorize a payout. ERC-1271 support exists behind a disabled flag and has not passed live contract-wallet validation.
+4. The backend creates an owner-scoped request with immutable terms. Request creation fails closed unless the deployment has current operator, liquidity, and term-expiry attestations.
+5. An operator separately accepts the request and allocates a dedicated shielded receiver through guarded, audited controls. Only then can payment instructions be published.
+6. Read-only verification checks the exact incoming Ironwood output and its confirmations. A separate operator approval is required before an external signer can submit the Base Sepolia payout.
+7. The backend verifies the canonical test-USDC transfer against the immutable recipient, amount, token contract, and approved sender before producing a private receipt.
 
-- `/api/v1` with strict API versioning and structured errors.
-- WebAuthn passkeys, stable database-backed users, rotating/revocable HttpOnly sessions, exact-origin checks, and double-submit CSRF tokens.
-- Request-size limits, rate limiting, HTTP parser timeouts, and security headers.
-- `/health/live` and dependency-aware `/health/ready`.
-- Static production assets and SPA fallbacks for `/history` and other frontend routes.
-- No HTTP endpoints for address derivation, wallet RPC, payout approval, signing, or broadcasting.
+The code and fixture-backed tests cover this lifecycle. The final hosted infrastructure, live chain integrations, operator liquidity, external payout signer, and first newly linked funded settlement remain unverified.
 
-PostgreSQL is authoritative for new production requests, signed order manifests, allocation journals, scoped authorizations, replay references, encrypted settlement evidence, authenticated receipts, state versions, ownership, and append-only audit history. Existing operator JSON databases are preserved but inactive and have deliberately not been migrated.
+## Privacy and trust model
 
-## Development
+Zecori starts from a shielded source instead of requiring the user to unshield before entering the route. Private destinations, payment instructions, settlement evidence, and owner receipts are encrypted at rest. Shareable receipts omit transaction IDs, addresses, internal order correlation, exact settlement amounts, and settlement timestamps.
 
-Requirements: Node `24.14.1`, pnpm `10.33.4`, and PostgreSQL 17 for production-mode tests.
+Privacy is not end to end:
+
+- the Base Sepolia destination and token transfer are public;
+- the receiving operator can correlate the private request, dedicated Zcash receiver, source evidence, and public payout;
+- amount and timing may enable outside correlation;
+- a shielded memo is visible to the receiving operator, so instructions require no memo; and
+- settlement depends on an operator and liquidity provider, not an atomic bridge or trustless protocol.
+
+There are no automatic payouts or refunds. Ambiguous evidence, reorgs, replay attempts, mismatched recipients, stale authorizations, or interrupted broadcasts must stop in an unresolved state for human review. See [settlement privacy and chain evidence](docs/settlement-privacy-evidence.md) for the detailed observer and data-boundary analysis.
+
+## Implemented and locally tested
+
+- Responsive route exploration, review, recovery, private activity, and receipt experiences, including mobile, reduced-motion, dark/light, and Arabic right-to-left layouts.
+- Passkey registration and login, multiple credentials, rotating and revocable HttpOnly sessions, exact-origin checks, double-submit CSRF protection, and owner isolation.
+- A versioned `/api/v1` Node server with structured errors, request limits, rate limiting, security headers, parser timeouts, and liveness/readiness endpoints.
+- PostgreSQL-backed immutable manifests, allocation journals, scoped authorizations, replay protection, encrypted private data, lifecycle recovery states, receipts, and append-only audit history.
+- EIP-712 destination-control proof, EIP-55 recipient validation, owner binding, and rejection of unverified destinations.
+- Guarded operator lifecycle controls, read-only Zcash source checks, signed private-verifier relay contracts, Base Sepolia transfer verification, and duplicate-settlement protection.
+- Optional handles, exact-match opt-in discovery, encrypted contacts, non-paying request intents, and a durable owner-scoped inbox backed by a transactional outbox. Handles never resolve to wallet addresses or authorize payment.
+- A deterministic limited-mode assistant with typed, allow-listed tools and no wallet or settlement authority.
+- Build-time MDX product documentation and English, French, and Arabic message catalogs. French and Arabic security wording still awaits human review.
+
+Local evidence includes unit, API, PostgreSQL integration, virtual WebAuthn/browser, accessibility, privacy, security, documentation, type-check, and production-build checks. Two live-chain tests are intentionally skipped in the recorded suite. See the [submission release review](docs/submission-release-review.md) and [roadmap](ROADMAP.md) for the evidence ledger and remaining gates.
+
+## Implemented but not live-verified
+
+- The full shielded-source to Base Sepolia lifecycle for a newly linked order.
+- Final-host EIP-712 wallet behavior and optional ERC-1271 contract-wallet checks.
+- The signed private Zcash verifier relay against a persistent synchronized testnet backend.
+- Physical passkeys, final-domain WebAuthn behavior, and two-profile isolation on a public HTTPS deployment.
+- The prepared Render and Neon judge configuration.
+- Provider-backed AI and Groq speech. Both require explicit operator opt-in, credentials, and live acceptance; voice remains disabled in the product UI.
+- Noir Wallet v1.0.40 compatibility. The read-only adapter fails closed pending an isolated, checksum-verified testnet extension test.
+- Privy email and Google sign-in. The client path is compiled out and disabled pending a clean supported dependency graph and live tenant acceptance.
+
+Mainnet, live quotes, automatic settlement, automatic refunds, payment by handle, external notifications, and active multichain support are not implemented product capabilities.
+
+## Architecture
+
+```text
+React + Vite web application
+  ├─ public route and capability registry
+  ├─ passkey-protected account, activity, inbox, and receipts
+  ├─ build-time MDX documentation
+  └─ deterministic / optional provider-backed assistant
+                  │
+                  │ same-origin /api/v1, CSRF and owner checks
+                  ▼
+Standalone Node server ───────── PostgreSQL authority
+  ├─ auth and rotating sessions   ├─ immutable order manifests
+  ├─ route-readiness gates        ├─ encrypted private records
+  ├─ lifecycle and recovery       ├─ transactional outbox
+  └─ health/static SPA serving    └─ append-only audit history
+                  │
+                  │ signed evidence and explicit operator actions
+                  ▼
+Private operator boundary (not exposed by the public HTTP API)
+  ├─ Zcash testnet read-only verification / receiver allocation
+  ├─ manual liquidity and payout approval
+  ├─ external Base payout signer (not included in this repository)
+  └─ Base Sepolia canonical transfer verification
+```
+
+The standalone server serves both the production frontend and API. Vite is a frontend-only development server. The public API has no endpoints for wallet RPC, address derivation, payout approval, signing, or broadcasting.
+
+## Run and test locally
+
+Requirements:
+
+- Node.js `24.14.1`
+- pnpm `10.33.4` through Corepack
+- PostgreSQL 17 for production-mode and integration testing
+
+Install and run the local verification suite:
 
 ```bash
 corepack pnpm install --frozen-lockfile
@@ -53,10 +134,12 @@ corepack pnpm security:gate
 corepack pnpm preflight -- --static
 ```
 
-Vite no longer contains backend middleware. For split development, run the API and Vite in separate terminals after configuring a disposable PostgreSQL database:
+For split development, configure a disposable PostgreSQL database, then run the API and Vite in separate terminals:
 
 ```bash
-DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm db:migrate
+DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
+corepack pnpm db:migrate
+
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
 ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
 BASE_SEPOLIA_RPC_URL='https://YOUR_TRUSTED_BASE_SEPOLIA_RPC' \
@@ -68,86 +151,69 @@ corepack pnpm dev:api
 corepack pnpm dev
 ```
 
-Each authenticated request supplies an explicitly confirmed Base Sepolia recipient. The server validates its EIP-55 form, encrypts it, and binds it to the owner and immutable manifest; there is no configured fallback recipient. Operator acceptance additionally requires the single-use EIP-712/ ERC-1271 destination-control ceremony documented in [Milestone 06C](docs/milestone-06c-destination-wallet-control.md).
+Open `http://127.0.0.1:5173`. Financial readiness flags are off by default; keep them off for UI and account testing.
 
-## Local production mode
+To exercise the built application through the standalone server:
 
 ```bash
 corepack pnpm build
-DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' corepack pnpm db:migrate
+DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
+corepack pnpm db:migrate
+
 NODE_ENV=development \
 DATABASE_URL='postgresql://USER:PASSWORD@127.0.0.1:5432/zecathon' \
 ZECATHON_ENCRYPTION_KEY_FILE='/absolute/private/path/encryption-keyring.json' \
 BASE_SEPOLIA_RPC_URL='https://YOUR_TRUSTED_BASE_SEPOLIA_RPC' \
 PUBLIC_ORIGIN='http://127.0.0.1:8787' \
 corepack pnpm start
+
 node scripts/smoke-production.mjs http://127.0.0.1:8787
 ```
 
-`NODE_ENV=production` expects a trusted TLS proxy and rejects API traffic without `X-Forwarded-Proto: https`.
+`NODE_ENV=production` requires a trusted TLS proxy and rejects API traffic unless the forwarded protocol is HTTPS. Use disposable data and synthetic identities for all local acceptance work.
 
 ## Deployment
 
-For the zero-budget judge deployment, use [Free Render + Neon](docs/free-render-neon-deployment.md). It runs the existing frontend and API as one free web service and keeps durable state in a new external TLS-only PostgreSQL project; it does not require Docker Compose or a developer laptop. The top-level [roadmap](ROADMAP.md) separates implemented, locally tested, live-verified, and blocked work, while [private verifier hosting](docs/private-verifier-hosting.md) defines the separate infrastructure required before any live settlement claim.
+Deployment configuration is prepared, but no live deployment is claimed.
 
-See [production deployment](docs/production-deployment.md) for the paid/dedicated Docker Compose path, TLS, secrets, health checks, backups, restore drills, and smoke tests. The [submission release review](docs/submission-release-review.md) records the earlier local evidence, blockers, and safe PR commands; the [two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) uses verified claims only. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
+### Judge deployment: Render + Neon
 
-For isolated localhost staging, passkey behavior, encrypted backup/restore, and the exact safe startup commands, see [milestone 05 staging](docs/staging-milestone-05.md).
+The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes one Node web service backed by a new TLS-only PostgreSQL database. It keeps all financial readiness flags disabled and includes final-domain health, passkey, isolation, persistence, and recovery acceptance steps. The configured hostname must not be treated as live until those checks pass.
 
-The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. Set `VCS_REF` to the exact reviewed 40-character Git revision before building; Compose passes it into every application image. The public domain is also the explicit WebAuthn RP ID. The verifier has no host port and requires a separate service token. Zcash source verification uses a durable PostgreSQL relay with separate Ed25519 coordinator/verifier identities, short-lived signed messages, encrypted evidence and lease recovery; wallet RPC remains loopback-only on the operator host. Production use still requires approved PostgreSQL mTLS identities and a separately approved watch-only UFVK ceremony.
+This public web deployment alone cannot settle a route. A persistent private verifier host, synchronized Zcash testnet backend, separately authorized watch-only setup, operator liquidity, external Base signer, backup/restore evidence, and manual operating procedure are still required. See [private verifier hosting](docs/private-verifier-hosting.md).
 
-## Operator-only settlement commands
+### Dedicated deployment: Docker Compose
 
-Private operator state defaults to `${XDG_DATA_HOME:-~/.local/share}/zecathon-crosschain-app` with mode-`0700` directories and mode-`0600` files. It is outside frontend assets and ignored by Git.
+The [production deployment guide](docs/production-deployment.md) covers the Caddy, Node, PostgreSQL, and isolated verifier topology, including TLS, secrets, exact Git revision provenance, health checks, backups, restore drills, and smoke tests. [Judge deployment](docs/judge-deployment.md) documents the isolated Compose alternative.
 
-Production lifecycle commands require `DATABASE_URL`, `ZECATHON_ENCRYPTION_KEY_FILE`, and the separately provisioned operator HMAC key. Status and review are read-only:
+Set `VCS_REF` to the exact reviewed 40-character revision before building. Never copy an existing wallet, cookie, key, database, or private order record into an image. Deployment, DNS, migrations, provider activation, wallet access, and settlement each require separate operator authorization.
 
-```bash
-corepack pnpm operator -- status
-corepack pnpm operator -- pending-requests
-corepack pnpm operator -- orders
-```
+## Documentation
 
-The exact lifecycle sequence is:
+- [Roadmap and evidence status](ROADMAP.md) — implemented, locally tested, awaiting live verification, blocked, and future work.
+- [Getting started](src/docs/pages/getting-started.mdx) and [route availability](src/docs/pages/route-availability.mdx) — the user-facing product guide.
+- [Privacy and custody](src/docs/pages/privacy-custody.mdx) and [security](src/docs/pages/security.mdx) — user-visible guarantees and limits.
+- [Order recovery](src/docs/pages/order-recovery.mdx) and [receipts](src/docs/pages/receipts.mdx) — lifecycle and evidence semantics.
+- [API architecture](src/docs/pages/api-architecture.mdx) — application boundaries and service responsibilities.
+- [First linked test readiness](docs/first-linked-test-readiness.md) — future approval sequence; it is not authorization to transact.
+- [Production verifier](docs/production-verifier.md) and [storage migration](docs/storage-migration.md) — infrastructure and private-data handling.
+- [AI and voice boundaries](docs/ai-and-voice.md) and [AI agent operations](docs/ai-agent-operations.md) — provider gates and no-authority guarantees.
+- [Two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) and [Zecathon submission packet](docs/zecathon-submission.md) — judge-ready language using verified claims only.
 
-```bash
-corepack pnpm operator -- accept-request --request REQUEST_UUID --terms '0.01 TAZ -> 1 test USDC' --operator OPERATOR_ID --confirm 'EXECUTE ACCEPT-REQUEST'
-corepack pnpm operator -- authorize-allocation --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE AUTHORIZE-ALLOCATION'
-corepack pnpm operator -- reserve-validated-allocation --order ORDER_UUID --authorization AUTH_UUID --receiver EXISTING_RECEIVER --operator OPERATOR_ID --confirm 'EXECUTE RESERVE-VALIDATED-ALLOCATION'
-corepack pnpm operator -- publish-instructions --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE PUBLISH-INSTRUCTIONS'
-corepack pnpm operator -- observe-source --order ORDER_UUID --tx ZCASH_TXID --confirm 'EXECUTE OBSERVE-SOURCE'
-corepack pnpm operator -- confirm-source --order ORDER_UUID --confirm 'EXECUTE CONFIRM-SOURCE'
-corepack pnpm operator -- queue-payout --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE QUEUE-PAYOUT'
-corepack pnpm operator -- authorize-payout --order ORDER_UUID --operator OPERATOR_ID --confirm 'EXECUTE AUTHORIZE-PAYOUT'
-corepack pnpm operator -- approve-payout --order ORDER_UUID --authorization AUTH_UUID --operator OPERATOR_ID --confirm 'EXECUTE APPROVE-PAYOUT'
-corepack pnpm operator -- record-payout --order ORDER_UUID --tx BASE_TX_HASH --operator OPERATOR_ID --confirm 'EXECUTE RECORD-PAYOUT'
-corepack pnpm operator -- verify-payout --order ORDER_UUID --confirm 'EXECUTE VERIFY-PAYOUT'
-corepack pnpm operator -- verify-receipt --receipt RECEIPT_UUID
-corepack pnpm operator -- expire-order --order ORDER_UUID --confirm 'EXECUTE EXPIRE-ORDER'
-corepack pnpm operator -- mark-unresolved --order ORDER_UUID --reason REASON --operator OPERATOR_ID --confirm 'EXECUTE MARK-UNRESOLVED'
-```
+The built application also exposes the local manual at `/docs/getting-started`.
 
-Every mutation requires its exact confirmation phrase in an interactive terminal. `reserve-validated-allocation` validates an already-existing receiver through isolated wallet RPC; it does not derive one. No command unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds. Operator mutations are absent from the public HTTP API.
+## For contributors and judges
 
-## Assistant and voice boundaries
+Start with the public route and documentation, then use the local production-mode instructions above for the closest safe product walkthrough. Treat fixture-backed receipts and UI previews as demonstrations of state handling, not proof of a funded settlement. The [roadmap](ROADMAP.md) is the source of truth for evidence status.
 
-The assistant now runs through a provider-independent server gateway. Its only model-callable functions are the typed, allow-listed public and account-scoped tools in `server/agent-tools.ts`. Account tools resolve ownership again on the server and send only redacted status or shareable receipt data to the model. No tool can derive an address, create an order, approve a payout, sign, broadcast, or call operator controls.
-
-Without provider configuration, `/api/v1/capabilities` and every assistant response clearly report `limited` mode. Limited mode remains deterministic and does not present itself as generative AI. The gateway supports explicit OpenAI and Groq Responses adapters; the reviewed Groq model is `openai/gpt-oss-20b`. Credentials alone do not activate either provider: external calls require the exact separate `AI_EXTERNAL_REQUESTS_APPROVED` operator opt-in. See [AI agent operations](docs/ai-agent-operations.md) for dedicated-project key handling, budgets, provider-specific retention behavior, bounded request settings, and separately gated live validators.
-
-Voice remains disabled in the product UI because no speech provider has been configured and tested. The voice state machine requires a user-initiated processing and retention disclosure before microphone permission, exposes recording/processing/transcript-confirmation states, blocks wallet/session material from speech output, and marks every transcript as incapable of payment authorization. Text input remains available.
-
-English, French, and Arabic message catalogs and locale negotiation are available, including right-to-left layout for Arabic. English is reviewed; French and Arabic are explicitly marked machine-generated and unvalidated. New locales fail closed to English at the UI boundary and are rejected by the agent API unless registered.
-
-Milestone 06A's public swap journey and the exact destination-binding blocker are documented in [wallet readiness](docs/milestone-06a-wallet-readiness.md).
+Contributions should preserve the fail-closed capability registry, owner isolation, operator separation, and explicit status language. New chains or tokens are not supported until their recipient proof, verifier, liquidity, signer separation, recovery behavior, and receipt evidence independently pass the same gates.
 
 ## Non-negotiable safety rules
 
-- No wallet unlocking through the application.
-- No automatic address derivation.
-- No transaction signing or broadcasting.
-- No automatic payout approval or retry.
+- No wallet unlocking through the public application.
+- No automatic address derivation, transaction signing, or broadcasting.
+- No automatic payout approval, retry, or refund promise.
 - No mainnet execution.
 - No client-provided evidence can mark an order completed.
 - No operator HMAC key may be reused as a wallet or database-encryption key.
-- No existing wallet, cookie, key, or private order database may be copied into a deployment image.
+- No private wallet, cookie, key, or order database may be copied into a deployment image.
