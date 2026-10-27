@@ -30,7 +30,7 @@ class ScopedStore implements PublicOrderRequestStore {
   async list(ownerId: string) { return ownerId === ownerA ? [structuredClone(this.request)] : []; }
   async getShareableReceipt(id: string): Promise<ShareableReceipt | undefined> {
     if (id !== receiptId) return undefined;
-    return { receiptId, kind: 'final', destinationChain: 'base-sepolia', destinationAsset: { symbol: 'USDC', contract: BASE_USDC, decimals: 6, classification: 'Circle test token' }, verifiedDestinationAmount: '1', destinationSettlementTimestamp: '2026-01-01T00:10:00.000Z', verificationStatus: 'independently-verified', printableNotice: 'This is a print-safe research receipt, not a cryptographically authenticated PDF.', orderReference: 'order-bbbbbbbb', privacyClassification: 'redacted-shareable', redactions: ['source transaction ID'] };
+    return { receiptId, kind: 'final', destinationChain: 'base-sepolia', destinationAsset: { symbol: 'USDC', contract: BASE_USDC, decimals: 6, classification: 'Circle test token' }, verificationStatus: 'independently-verified', printableNotice: 'This is a print-safe research receipt, not a cryptographically authenticated PDF.', orderReference: 'order-bbbbbbbb', privacyClassification: 'redacted-shareable', redactions: ['source transaction ID', 'destination amount', 'destination settlement timestamp'] };
   }
   async getPrivateReceipt(): Promise<FinalReceipt | undefined> { throw new Error('Private receipts must never be read by the agent'); }
 }
@@ -211,7 +211,7 @@ test('account tools enforce authentication, ownership, redaction, and receipt au
   assert.doesNotMatch(status, /utest1|secret evidence|private operator note|0x5555/);
   await assert.rejects(executeAgentTool('get_authorized_receipt', { receiptId }, { store, userId: ownerB }), /not authorized/i);
   const receipt = JSON.stringify(await executeAgentTool('get_authorized_receipt', { receiptId }, { store, userId: ownerA }));
-  assert.match(receipt, /redacted-shareable/); assert.doesNotMatch(receipt, /sourceTransactionId|sourceReceiver/);
+  assert.match(receipt, /redacted-shareable/); assert.doesNotMatch(receipt, /sourceTransactionId|sourceReceiver|verifiedDestinationAmount|destinationSettlementTimestamp/);
   await assert.rejects(executeAgentTool('get_order_status', { requestId, extra: true }, { store, userId: ownerA }), /schema/i);
   await assert.rejects(executeAgentTool('get_order_status', { requestId: 'not-a-uuid' }, { store, userId: ownerA }), /UUID/i);
 });

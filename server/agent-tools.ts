@@ -105,8 +105,8 @@ export async function executeAgentTool(name: string, argumentsValue: unknown, co
     exactKeys(argumentsValue, []);
     return {
       sourcePool: PUBLIC_ROUTE_TERMS.source.pool,
-      privacy: 'The source uses an Ironwood shielded receiver. Public receipts redact source transaction correlation and the receiver.',
-      limits: 'The trusted liquidity provider and authorized verification components still observe the evidence required to settle the order. Shielding is not anonymity from the provider.',
+      privacy: 'The source uses a dedicated Ironwood shielded receiver. Public receipts redact both chain transaction identifiers, exact settlement amounts and settlement timestamps.',
+      limits: 'The trusted liquidity provider and authorized verification components can correlate the order, dedicated receiver, source evidence and public Base payout. A supplied shielded memo is readable by the receiver, so payment instructions require no memo. Shielding is not anonymity from the provider.',
     };
   }
   if (name === 'prepare_swap_request') {

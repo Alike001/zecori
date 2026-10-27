@@ -9,6 +9,7 @@ import { verifyBaseSepoliaTransaction } from '../server/base-sepolia-verifier.ts
 import { PrivateVerificationRelay } from '../server/private-verification-relay.ts';
 import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
 import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from '../server/wallet-control.ts';
+import { loadOperatorConfig } from '../server/operator-config.ts';
 
 function parse(values: string[]): { command: string; options: Record<string, string> } {
   if (values[0] === '--') values.shift(); const [command = 'help', ...rest] = values; const options: Record<string, string> = {};
@@ -83,7 +84,11 @@ try {
       case 'authorize-payout': { const id = await store.issueAuthorization(required(options.order, 'Order ID'), 'PAYOUT', required(operatorId, 'Operator ID'), (domain, value) => controls.signOperatorPayload(domain, value)); print({ authorizationId: id, action: 'PAYOUT', payoutPerformed: false }); break; }
       case 'approve-payout': await store.approvePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.authorization, 'Authorization ID'), (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature)); print({ stage: 'PAYOUT_APPROVED', payoutPerformed: false }); break;
       case 'record-payout': await store.recordPayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.tx, 'Destination transaction ID')); print({ stage: 'PAYOUT_REFERENCE_RECORDED', payoutPerformed: false }); break;
-      case 'verify-payout': { const receiptId = await store.verifyPayout(required(options.order, 'Order ID'), value => controls.signReceipt(value), verifyBaseSepoliaTransaction); print({ stage: 'VERIFIED_RECEIPT_CREATED', receiptId }); break; }
+      case 'verify-payout': {
+        const { lpSender } = await loadOperatorConfig();
+        const receiptId = await store.verifyPayout(required(options.order, 'Order ID'), value => controls.signReceipt(value), request => verifyBaseSepoliaTransaction({ ...request, expectedSender: lpSender }));
+        print({ stage: 'VERIFIED_RECEIPT_CREATED', receiptId, payoutSenderBound: true }); break;
+      }
       case 'verify-receipt': { const result = await store.verifyReceiptAuthenticity(required(options.receipt, 'Receipt ID'), (value, signature) => controls.verifyReceipt(value, signature)); print({ ...result, orderId: masked(result.orderId) }); break; }
       case 'expire-order': await store.expire(required(options.order, 'Order ID')); print({ stage: 'ORDER_EXPIRED' }); break;
       case 'mark-unresolved': await store.setUnresolved(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.reason, 'Resolution reason')); print({ stage: 'ORDER_UNRESOLVED' }); break;

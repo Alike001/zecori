@@ -30,12 +30,12 @@ Show the confirmed optional handle and private inbox screenshots.
 
 Ask the deterministic assistant what the supported route is, then open Activity or the evidence documentation.
 
-> “Typed cards are grounded in server facts. The assistant cannot sign, pay, allocate an address, approve settlement, or manufacture success. Private receipts appear only from backend-owned lifecycle evidence. Accepted payment instructions show exact assets, networks, amounts, fee status, expiry, and refund policy before any manual send.”
+> “Typed cards are grounded in server facts. The assistant cannot sign, pay, allocate an address, approve settlement, or manufacture success. Private receipts appear only from backend-owned lifecycle evidence. Accepted payment instructions require no memo and show exact assets, networks, amounts, fee status, expiry, refund policy, and the operator-correlation boundary before any manual send.”
 
 ## 1:48–2:00 — Honest limits
 
 Open the roadmap/evidence page.
 
-> “Mainnet, payment by handle, automatic settlement and refunds, Privy, live provider calls, external alerts, the public judge deployment, and the first funded linked swap remain off or unverified. The release fails closed where evidence is missing.”
+> “Mainnet, payment by handle, automatic settlement and refunds, Privy, live provider calls, external alerts, the public judge deployment, and the first funded linked swap remain off or unverified. Public receipts also remove exact amounts and timestamps to reduce correlation. The release fails closed where evidence is missing.”
 
 End on “Private origin. Verified arrival.”

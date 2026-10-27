@@ -11,7 +11,7 @@ import {
 } from '../src/lib/order-coordinator.ts';
 import { verifyBaseSepoliaErc20Receipt, verifyZcashShieldedReceipt } from '../src/lib/read-only-verification.ts';
 import { createFinalReceipt, toShareableReceipt, type FinalReceipt, type ShareableReceipt } from '../src/lib/receipt.ts';
-import { verifyBaseSepoliaTransaction, type BaseVerificationRequest } from './base-sepolia-verifier.ts';
+import type { BaseVerificationRequest, verifyBaseSepoliaTransaction } from './base-sepolia-verifier.ts';
 import { validateUnusedWalletBAddress, type ValidatedReceivingAddress } from './zcash-address-allocator.ts';
 import { verifyZcashTransaction, type ZcashVerificationRequest } from './zcash-verifier.ts';
 import { atomicCreatePrivateFile } from './private-storage.ts';
@@ -36,7 +36,7 @@ type Database = {
   preparedOrders: PreparedOperatorOrder[];
 };
 type SourceVerifier = (request: ZcashVerificationRequest) => ReturnType<typeof verifyZcashTransaction>;
-type DestinationVerifier = (request: BaseVerificationRequest) => ReturnType<typeof verifyBaseSepoliaTransaction>;
+type DestinationVerifier = (request: Omit<BaseVerificationRequest, 'expectedSender'>) => ReturnType<typeof verifyBaseSepoliaTransaction>;
 type AddressValidator = (address: string) => Promise<ValidatedReceivingAddress>;
 
 export type OrderView = Pick<PaymentOrder,
@@ -361,7 +361,7 @@ export class FileOrderStore {
   }
 
   /** Operator-only verification. The stored approved reference is used; browser-supplied hashes are never accepted. */
-  async verifyPayout(ownerId: string, id: string, verifier: DestinationVerifier = verifyBaseSepoliaTransaction): Promise<OrderView> {
+  async verifyPayout(ownerId: string, id: string, verifier: DestinationVerifier): Promise<OrderView> {
     return this.exclusive(async () => {
       await this.load(); const [index, order] = this.find(ownerId, id);
       if (!order.payoutTransactionId || order.status !== 'PAYOUT_SUBMITTED') throw new Error('No approved payout submission exists');

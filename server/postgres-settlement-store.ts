@@ -8,7 +8,7 @@ import {
 import { canonicalOperatorOrderBinding, createOperatorOrderBinding, validateOperatorOrderBinding, type OperatorOrderBinding } from '../src/lib/operator-order.ts';
 import { createFinalReceipt, toShareableReceipt, type FinalReceipt, type ShareableReceipt } from '../src/lib/receipt.ts';
 import { verifyBaseSepoliaErc20Receipt, verifyZcashShieldedReceipt } from '../src/lib/read-only-verification.ts';
-import { verifyBaseSepoliaTransaction, type BaseVerificationRequest } from './base-sepolia-verifier.ts';
+import type { BaseVerificationRequest, verifyBaseSepoliaTransaction } from './base-sepolia-verifier.ts';
 import { DataEncryption } from './data-encryption.ts';
 import { PUBLIC_ROUTE_TERMS } from './public-order-store.ts';
 import { verifyZcashTransaction, type ZcashVerificationRequest } from './zcash-verifier.ts';
@@ -19,7 +19,7 @@ import { assertDestinationPayload, destinationIntentContext, destinationRecipien
 import { BaseSepoliaWalletControlVerifier, proofContext, type WalletControlProof } from './wallet-control.ts';
 
 type SourceVerifier = (request: ZcashVerificationRequest) => ReturnType<typeof verifyZcashTransaction>;
-type DestinationVerifier = (request: BaseVerificationRequest) => ReturnType<typeof verifyBaseSepoliaTransaction>;
+type DestinationVerifier = (request: Omit<BaseVerificationRequest, 'expectedSender'>) => ReturnType<typeof verifyBaseSepoliaTransaction>;
 type ManifestSigner = (binding: OperatorOrderBinding, operatorId: string) => Promise<string>;
 type ReceiptSigner = (canonicalReceipt: string) => Promise<string>;
 type ReceiptVerifier = (canonicalReceipt: string, signature: string) => Promise<void>;
@@ -459,7 +459,7 @@ export class PostgresSettlementStore {
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
 
-  async verifyPayout(orderId: string, signer: ReceiptSigner, verifier: DestinationVerifier = verifyBaseSepoliaTransaction, now = Date.now()): Promise<string> {
+  async verifyPayout(orderId: string, signer: ReceiptSigner, verifier: DestinationVerifier, now = Date.now()): Promise<string> {
     const snapshot = await this.readOrder(orderId); const order = this.privateOrder(snapshot);
     if (!order.payoutTransactionId || order.status !== 'PAYOUT_SUBMITTED') throw new Error('No approved payout submission exists');
     await this.assertImmutableDestination(snapshot);

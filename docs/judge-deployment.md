@@ -12,6 +12,15 @@ The standalone `compose.judge.yaml` assigns a distinct Compose project, database
 - A trusted Base Sepolia HTTPS RPC URL. No payout signer, Zcash wallet, wallet data, relay private key, or staging backup belongs on this host.
 - The exact reviewed 40-character `VCS_REF`.
 
+## Immediate deployment checklist
+
+1. Authorize one dedicated host and final HTTPS hostname; set DNS before passkey acceptance.
+2. Create fresh judge-only database, encryption, verifier and TLS secrets. Verify file ownership/mode without printing values.
+3. Set `PUBLIC_ORIGIN=https://<judge-host>` and `WEBAUTHN_RP_ID=<judge-host>` to the exact final hostname; do not use an IP address, staging hostname or temporary preview origin.
+4. Keep request and liquidity flags at `0`, render `compose.judge.yaml`, and confirm every project, network, volume and database name is judge-only.
+5. Build, migrate only the new judge database, start TLS, and run `smoke-judge.mjs` against the public HTTPS origin.
+6. Complete the two-fresh-profile acceptance and isolated backup/restore check below before considering any route flag change.
+
 Keep `ZECATHON_ROUTE_REQUESTS_ENABLED=0` and `ZECATHON_ROUTE_LIQUIDITY_READY=0` for the first deployment. Public exploration, authentication, handles, contacts, inbox, history, and recovery can be accepted in this mode. Opening requests requires all three independent gates: operator readiness set to `1`, liquidity readiness set to `1`, and a reviewed future UTC `ZECATHON_ROUTE_TERMS_VALID_UNTIL`. Expired terms close the route automatically. These gates open request creation only; they do not allocate an address, sign, broadcast, pay out, or prove settlement.
 
 ## Preflight and first start

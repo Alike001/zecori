@@ -36,7 +36,7 @@ Zecori is a privacy-first route desk for one deliberately constrained cross-chai
 
 Zecori does not pretend to be a trustless bridge. An experimental trusted liquidity provider temporarily custodies test funds; payout requires separate operator approval and independent source/destination checks. No browser or AI path can allocate an address, spend from a wallet, sign, broadcast, approve a payout, fabricate a quote, or manufacture a completed receipt. Mainnet, live quotes, automatic settlement/refunds, Privy login, payment by handle, ERC-1271 wallets, external alerts, and settings remain disabled or planned.
 
-The Zcash privacy value is explicit: the source payment stays in the Ironwood shielded pool, public receipts omit shielded source correlation, and private settlement data is owner-scoped and encrypted at rest. The Base Sepolia destination is transparently disclosed as public. Zecori makes that boundary visible instead of marketing cross-chain privacy it cannot provide.
+The Zcash privacy value is explicit: the source payment stays in the Ironwood shielded pool, public receipts omit both transaction IDs plus exact settlement amounts and timestamps, and private settlement data is owner-scoped and encrypted at rest. Payment instructions prohibit memos because the receiving operator can read them. The Base Sepolia destination is transparently disclosed as public, and the operator can correlate both legs. Zecori makes that boundary visible instead of marketing cross-chain privacy it cannot provide.
 
 ### Unique Zcash privacy value
 

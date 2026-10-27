@@ -66,6 +66,7 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: 8790
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:?Set a trusted Base Sepolia HTTPS RPC URL}
       VERIFIER_TOKEN_FILE: /run/secrets/verifier_token
     secrets: [verifier_token]
     healthcheck:

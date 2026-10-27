@@ -12,6 +12,7 @@ This is a future approval sequence, not authorization to run it. Commands contai
 - The legacy JSON allocator is fail-closed. PostgreSQL is the only production allocation authority.
 - An RPC timeout, disconnect, process crash, or expired in-progress authorization retains the same journaled diversifier for `reconcile-allocation`; no replacement is selected. `cancel-allocation` is accepted only while the journal proves that no wallet RPC attempt began.
 - No command in this milestone signs or broadcasts Zcash or Base transactions. The payout transaction must be created outside this application after a separate approval; the app records and verifies its hash only.
+- Source payment instructions require an empty memo. A shielded memo is visible to Wallet B/the receiving operator and must never carry an account handle, private note, identity, or Base address. The pinned history response is not treated as proof that a memo was absent.
 
 ## Approval sequence and exact command shapes
 
@@ -122,6 +123,8 @@ Set private environment variables in an operator-only shell without putting secr
 
 9. **Verify destination and final receipt.** Record only the externally returned hash, verify canonical Base settlement, then authenticate the receipt:
 
+   `verify-payout` loads the private operator configuration and requires the official test-USDC `Transfer` event to match its confirmed LP sender as well as the immutable recipient and exact amount. A same-amount transfer from any other address is rejected.
+
    ```bash
    corepack pnpm operator -- record-payout --order '<ORDER_UUID>' --tx '<0x_BASE_TX_HASH>' --operator '<OPERATOR_ID>' --confirm 'EXECUTE RECORD-PAYOUT'
    corepack pnpm operator -- verify-payout --order '<ORDER_UUID>' --confirm 'EXECUTE VERIFY-PAYOUT'
@@ -131,3 +134,5 @@ Set private environment variables in an operator-only shell without putting secr
 Stop immediately on RPC ambiguity, reorg, stale/forged relay evidence, insufficient funds, recipient mismatch, expired authorization or restart inconsistency. Mark the order `UNRESOLVED`; never retry a potentially broadcast payment automatically.
 
 Historical Experiment 03 and Experiment 06 transaction identifiers are verifier fixtures only. The source and destination transaction identifiers used for the first experiment must both be newly created and linked to this same order.
+
+The shareable receipt is deliberately weaker than the authenticated private receipt: it omits both transaction identifiers, the shielded receiver, internal order correlation, both exact settlement amounts and both settlement timestamps. Publish neither raw operator logs nor the private receipt as demo evidence.
