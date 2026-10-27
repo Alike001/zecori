@@ -19,7 +19,10 @@ services:
     networks: [edge]
 
   api:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?Set VCS_REF to the exact 40-character Git revision}
     restart: unless-stopped
     read_only: true
     tmpfs:
@@ -30,6 +33,7 @@ services:
       PORT: 8787
       TRUST_PROXY: "1"
       PUBLIC_ORIGIN: https://${DOMAIN}
+      WEBAUTHN_RP_ID: ${DOMAIN}
       BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:?Set a trusted Base Sepolia HTTPS RPC URL}
       ZECATHON_ERC1271_ENABLED: "0"
       DB_HOST: postgres
@@ -52,7 +56,10 @@ services:
     cap_drop: [ALL]
 
   verifier:
-    build: .
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:?Set VCS_REF to the exact 40-character Git revision}
     command: ["node", "--experimental-strip-types", "server/verifier-service.ts"]
     restart: unless-stopped
     read_only: true

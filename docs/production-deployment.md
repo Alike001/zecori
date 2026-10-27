@@ -34,13 +34,15 @@ UID/GID `10001` is the pinned unprivileged `zecathon` user inside the image. Loc
 
 ```bash
 docker compose config --quiet
-docker compose build
+VCS_REF="$(git rev-parse HEAD)" docker compose build
 docker compose up -d postgres
 docker compose run --rm api node --experimental-strip-types scripts/migrate.ts
 docker compose up -d
 curl --fail https://$DOMAIN/health/ready
 node scripts/smoke-production.mjs https://$DOMAIN
 ```
+
+Before building, verify `git rev-parse HEAD` is the reviewed commit and returns exactly 40 lowercase hexadecimal characters. Compose also binds `WEBAUTHN_RP_ID` to `DOMAIN`; changing either value requires registering passkeys again on the final HTTPS origin.
 
 Do not mount the existing Wallet A or Wallet B data directories into these containers. The source verifier remains outside this public stack pending the watch-only compatibility gate in [production verifier architecture](production-verifier.md).
 
