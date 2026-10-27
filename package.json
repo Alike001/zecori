@@ -32,6 +32,7 @@
     "smoke:judge": "node scripts/smoke-judge.mjs",
     "test:browser": "node --experimental-strip-types scripts/milestone-06a-browser-smoke.mjs",
     "test:a11y": "node --experimental-strip-types scripts/milestone-06a-browser-smoke.mjs",
+    "test:contrast": "node scripts/check-contrast.mjs",
     "docs:validate": "node scripts/validate-docs.mjs",
     "test:noir-wallet:isolated": "node scripts/noir-wallet-isolated-smoke.mjs",
     "staging:gate": "node scripts/staging-preflight.mjs",

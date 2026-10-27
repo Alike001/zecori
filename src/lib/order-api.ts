@@ -91,9 +91,25 @@ let csrfToken: string | undefined;
 
 export type UserSession = { authenticated: boolean; user?: { id: string; displayName: string; passkeyCount: number }; csrfToken?: string };
 
+export class ApiRequestError extends Error {
+  readonly code?: string;
+  readonly retryAfterSeconds?: number;
+  constructor(message: string, options: { code?: string; retryAfterSeconds?: number } = {}) {
+    super(message);
+    this.name = 'ApiRequestError';
+    this.code = options.code;
+    this.retryAfterSeconds = options.retryAfterSeconds;
+  }
+}
+
 async function parse<T>(response: Response): Promise<T> {
-  const value = await response.json() as T & { error?: string | { message?: string } };
-  if (!response.ok) throw new Error(typeof value.error === 'string' ? value.error : value.error?.message ?? 'Request failed');
+  const value = await response.json() as T & { error?: string | { code?: string; message?: string; retryAfterSeconds?: number } };
+  if (!response.ok) {
+    const details = typeof value.error === 'string' ? { message: value.error } : value.error;
+    const headerRetry = Number(response.headers.get('retry-after'));
+    const retryAfterSeconds = details?.retryAfterSeconds ?? (Number.isFinite(headerRetry) && headerRetry > 0 ? headerRetry : undefined);
+    throw new ApiRequestError(details?.message ?? 'Request failed', { code: details?.code, retryAfterSeconds });
+  }
   return value;
 }
 

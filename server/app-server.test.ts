@@ -34,7 +34,7 @@ class TestIdentity implements UserIdentityService {
   verifyCsrf(session: AuthenticatedUser, provided: string | string[] | undefined) { return provided === session.csrfToken; }
 }
 
-async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeState: boolean | { operatorAttested: boolean; liquidityReady: boolean; termsValidUntil?: string } = true, requireProxyHttps = false) {
+async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: PrivyIdentityService, speech?: SpeechProvider, routeState: boolean | { operatorAttested: boolean; liquidityReady: boolean; termsValidUntil?: string } = true, requireProxyHttps = false, userFeatureLimits?: { read: number; write: number }) {
   const folder = await mkdtemp(join(tmpdir(), 'zecathon-server-'));
   await mkdir(join(folder, 'assets'));
   await writeFile(join(folder, 'index.html'), '<!doctype html><main>zecathon-production</main>');
@@ -44,6 +44,7 @@ async function fixture(t: TestContext, maximum = 20, agentMaximum = 10, privy?: 
     store, auth: new TestIdentity(), publicOrigin: 'http://127.0.0.1:8787',
     routeReadiness: typeof routeState === 'boolean' ? (routeState ? { operatorAttested: true, liquidityReady: true, termsValidUntil: new Date(Date.now() + 60_000).toISOString() } : { operatorAttested: false, liquidityReady: false }) : routeState,
     staticDirectory: folder, rateLimit: { windowMs: 60_000, maximum }, agentRateLimit: { windowMs: 60_000, maximum: agentMaximum },
+    ...(userFeatureLimits ? { userFeatureReadRateLimit: { windowMs: 60_000, maximum: userFeatureLimits.read }, userFeatureWriteRateLimit: { windowMs: 60_000, maximum: userFeatureLimits.write } } : {}),
     requireProxyHttps,
     ...(privy ? { privy, privyAppId: 'public-test-app-id' } : {}), ...(speech ? { speech, speechStatus: speech.status } : {}),
   });
@@ -216,6 +217,32 @@ test('standalone server rate limits clients', async t => {
   assert.equal((await fetch(`${base}/api/v1/capabilities`)).status, 200);
   assert.equal((await fetch(`${base}/api/v1/capabilities`)).status, 200);
   assert.equal((await fetch(`${base}/api/v1/capabilities`)).status, 429);
+});
+
+test('owner feature reads and mutations use independent limits with retry guidance', async t => {
+  const { base, cookieA } = await fixture(t, 200, 10, undefined, undefined, true, false, { read: 4, write: 2 });
+  const headers = { cookie: cookieA, origin: 'http://127.0.0.1:8787', 'content-type': 'application/json', 'x-csrf-token': csrfA };
+
+  for (let index = 0; index < 4; index += 1) {
+    const read = await fetch(`${base}/api/v1/account/handle`, { headers: { cookie: cookieA } });
+    assert.equal(read.status, 200);
+    assert.equal(read.headers.get('x-user-feature-ratelimit-policy'), 'read');
+  }
+  const limitedRead = await fetch(`${base}/api/v1/account/handle`, { headers: { cookie: cookieA } });
+  assert.equal(limitedRead.status, 429);
+  assert.ok(Number(limitedRead.headers.get('retry-after')) >= 1);
+  assert.match(await limitedRead.text(), /account refreshes.*Try again/i);
+
+  const claim = await fetch(`${base}/api/v1/account/handle`, { method: 'PUT', headers, body: JSON.stringify({ candidate: 'limit-owner', expectedVersion: 0, confirmation: 'CLAIM @limit-owner' }) });
+  assert.equal(claim.status, 200, 'read traffic must not consume the mutation budget');
+  const version = ((await claim.json()) as { handle: { version: number } }).handle.version;
+  const privacy = await fetch(`${base}/api/v1/account/handle/discoverability`, { method: 'PATCH', headers, body: JSON.stringify({ discoverable: true, expectedVersion: version, confirmation: 'MAKE HANDLE DISCOVERABLE' }) });
+  assert.equal(privacy.status, 200, 'discoverability changes must use the mutation budget');
+  const limitedWrite = await fetch(`${base}/api/v1/handles/availability`, { method: 'POST', headers, body: JSON.stringify({ candidate: 'another-handle' }) });
+  assert.equal(limitedWrite.status, 429);
+  assert.equal(limitedWrite.headers.get('x-user-feature-ratelimit-policy'), 'write');
+  assert.ok(Number(limitedWrite.headers.get('retry-after')) >= 1);
+  assert.match(await limitedWrite.text(), /handle or contact changes.*Try again/i);
 });
 
 test('agent endpoint labels limited mode, validates language, and requires CSRF for signed-in reads', async t => {
