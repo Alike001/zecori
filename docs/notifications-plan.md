@@ -1,6 +1,8 @@
 # Spec: Transactional outbox and private inbox
 
-Status: `PLANNED` — in-app first. No notification store, dispatcher, or email sender exists.
+Status: `EXPERIMENTAL` — migration `010_handles_contacts_inbox.sql` implements the durable outbox, owner-scoped in-app inbox, and delivery-attempt ledger. Email and every other external channel remain disabled.
+
+Implementation note: the in-process dispatcher runs bounded leased batches and persists replay/idempotency state in PostgreSQL. No email sender or notification preference endpoint was added.
 
 ## Objective
 

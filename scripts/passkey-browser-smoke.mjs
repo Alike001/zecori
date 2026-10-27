@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 
-const origin = process.argv.find(value => /^https?:\/\//.test(value)) ?? 'http://localhost:8787';
+const originArgument = process.argv.find(value => /^https?:\/\//.test(value));
+if (!originArgument) throw new Error('Pass an explicit isolated test origin; this smoke creates account and request records.');
+if (process.env.PASSKEY_SMOKE_ISOLATED !== 'I_ACKNOWLEDGE_TEST_DATA_MUTATION') throw new Error('Set PASSKEY_SMOKE_ISOLATED=I_ACKNOWLEDGE_TEST_DATA_MUTATION only for an isolated disposable environment.');
+const origin = new URL(originArgument).origin;
 const profile = await mkdtemp(join(tmpdir(), 'zecathon-passkey-smoke-'));
 const chrome = spawn(process.env.CHROME_BIN ?? 'google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank',

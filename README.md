@@ -1,6 +1,6 @@
 # Zecori
 
-**Your Zcash. More possibilities.**
+**Private origin. Verified arrival.**
 
 Zecori is an original, privacy-first application for one explicitly constrained cross-chain test route. The name is provisional; repository paths, package identifiers, environment-variable prefixes, and database names remain unchanged.
 
@@ -16,11 +16,15 @@ The application does not offer mainnet execution, automatic payouts, trustless s
 
 The responsive public homepage explains the product, route availability, custody and recovery boundaries without requiring login. Visitors can explore every declared route; only the exact `0.01 TAZ -> 1 test USDC` test route is executable. Passkeys protect private history, tracking, and receipts. A financial request becomes operator-eligible only after an explicit EIP-712 or ERC-1271 destination-control proof; unverified destinations remain clearly labeled and blocked. Existing authenticated orders show genuine backend lifecycle state and reveal encrypted-at-rest payment instructions only after validated durable allocation.
 
-Optional Google and email sign-in through Privy is feature-flagged and disabled by default. It verifies Privy access tokens on the server and maps their opaque subject to the existing internal UUID account model. It does not create embedded wallets, enable delegated actions, or change settlement ownership. Existing passkeys remain supported. See the [Milestone 08A review report](docs/milestone-08a-review-ready.md) for setup, acceptance steps, and current dependency-audit limitations.
+Optional Google and email sign-in through Privy remains disabled. Its server verifier maps opaque subjects to the existing internal UUID account model and has no wallet authority, but the reviewed submission bundle compiles out the Privy React path because its transitive client graph has unresolved advisories. The SDK is build-only and absent from the production dependency tree and image; re-enabling it requires a clean upstream graph, a reviewed build change, and live tenant acceptance. Existing passkeys remain supported.
 
-The product now includes a navigable documentation site at `/docs/getting-started`, a shared feature-truth matrix, product navigation for Routes, Account, Activity, and the advisory AI assistant, plus clearly disabled Inbox and Settings locations. See the [Milestone 08B review report](docs/milestone-08b-review-ready.md), [handle/contact design](docs/handles-and-contacts-plan.md), [notification design](docs/notifications-plan.md), and [AI route contract](docs/ai-route-integration-contract.md).
+The product now includes a navigable MDX documentation site at `/docs/getting-started`, a shared feature-truth matrix, and product navigation for Routes, Account, Activity, Inbox, and the advisory AI assistant. Settings remains clearly planned.
+
+Milestone 09C adds experimental optional handles with typed confirmation, exact-match opt-in discovery, encrypted owner-only contacts, non-paying fixed-route request intents, and a durable owner-scoped in-app inbox backed by a PostgreSQL transactional outbox. Handles never resolve to wallet addresses or bypass destination proof; payment-by-handle and every external notification channel remain disabled. See [handles and private contacts](src/docs/pages/handles-contacts.mdx), [inbox and notifications](src/docs/pages/inbox-notifications.mdx), the [handle/contact design](docs/handles-and-contacts-plan.md), [notification design](docs/notifications-plan.md), and [AI route contract](docs/ai-route-integration-contract.md).
 
 Milestone 08C added deterministic multilingual route/review/status guidance, an authenticated opt-in Groq speech gateway with transcript correction and text fallback, `/docs/ai-and-voice`, an evidence-status roadmap, and an earlier Zecvia identity study retained as provenance. Milestone 08D provisionally adopts Zecori across the active product. See the [Milestone 08C review report](docs/milestone-08c-review-ready.md), [AI and voice boundaries](docs/ai-and-voice.md), [Zecori brand guidelines](docs/zecori-brand-guidelines.md), and [08D submission readiness](docs/milestone-08d-review-ready.md).
+
+Milestone 09B moves the in-app manual to build-time MDX with reviewed local React components and adds explicit wallet onboarding, Noir Wallet compatibility, mainnet/security, roadmap, and judge evidence routes. Noir Wallet v1.0.40 remains disabled pending an isolated, checksum-verified testnet extension acceptance; the prepared probe calls only silent `zcash_getAccounts`. See the [Noir compatibility assessment](docs/noir-wallet-v1.0.40-compatibility.md). No external agent skill or automatic installer was added; the [skill evaluation](docs/ai-skill-evaluation.md) records source and privilege boundaries.
 
 The standalone Node server provides:
 
@@ -40,6 +44,7 @@ Requirements: Node `24.14.1`, pnpm `10.33.4`, and PostgreSQL 17 for production-m
 ```bash
 corepack pnpm install --frozen-lockfile
 corepack pnpm test
+corepack pnpm docs:validate
 corepack pnpm typecheck
 corepack pnpm build
 corepack pnpm test:browser
@@ -83,11 +88,11 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 ## Deployment
 
-See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
+See [production deployment](docs/production-deployment.md) for Docker Compose, TLS, secrets, health checks, backups, restore drills, and smoke tests. The [submission release review](docs/submission-release-review.md) records the final local evidence, blockers, and safe PR commands; the [two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) uses verified claims only. See [storage migration](docs/storage-migration.md) before moving private records and [production verifier architecture](docs/production-verifier.md) for the UFVK compatibility gate.
 
 For isolated localhost staging, passkey behavior, encrypted backup/restore, and the exact safe startup commands, see [milestone 05 staging](docs/staging-milestone-05.md).
 
-The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. The verifier has no host port and requires a separate service token. Zcash source verification uses a durable PostgreSQL relay with separate Ed25519 coordinator/verifier identities, short-lived signed messages, encrypted evidence and lease recovery; wallet RPC remains loopback-only on the operator host. Production use still requires approved PostgreSQL mTLS identities and a separately approved watch-only UFVK ceremony.
+The Compose stack includes Caddy, the Node API, PostgreSQL, and an isolated read-only Base verification service. Set `VCS_REF` to the exact reviewed 40-character Git revision before building; Compose passes it into every application image. The public domain is also the explicit WebAuthn RP ID. The verifier has no host port and requires a separate service token. Zcash source verification uses a durable PostgreSQL relay with separate Ed25519 coordinator/verifier identities, short-lived signed messages, encrypted evidence and lease recovery; wallet RPC remains loopback-only on the operator host. Production use still requires approved PostgreSQL mTLS identities and a separately approved watch-only UFVK ceremony.
 
 ## Operator-only settlement commands
 

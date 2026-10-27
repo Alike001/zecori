@@ -1,6 +1,8 @@
 # Spec: Optional @handles and private contacts
 
-Status: `PLANNED` — reviewed design only. No handle resolution or payment-by-handle endpoint exists.
+Status: `EXPERIMENTAL` — the account handle, exact-match private-contact, and non-paying request-intent subset is implemented by migration `010_handles_contacts_inbox.sql`. Payment-by-handle and destination resolution remain disabled.
+
+Implementation note: the sections below preserve the reviewed design history. Milestone 09C implements `account_handles`, `reserved_handles`, `handle_history`, `handle_lookup_attempts`, `private_contacts`, and `handle_request_intents`. It intentionally does not implement the proposed future `destination_bindings`: existing owner-specific destination verification remains authoritative.
 
 ## Objective
 
