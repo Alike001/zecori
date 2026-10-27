@@ -21,6 +21,7 @@ export type AuthenticatedUser = {
   csrfToken: string;
   passkeyCount: number;
   sessionToken: string;
+  authenticatedAt?: string;
 };
 
 export type PublicSession = {
@@ -92,15 +93,15 @@ export class PostgresPasskeyAuth implements UserIdentityService {
     const token = cookieValue(request, 'zecathon_session');
     const csrf = cookieValue(request, 'zecathon_csrf');
     if (!validToken(token) || !validToken(csrf)) return undefined;
-    const result = await this.pool.query<{ user_id: string; display_name: string; csrf_hash: Buffer; passkey_count: string }>(`
-      SELECT s.user_id,u.display_name,s.csrf_hash,
+    const result = await this.pool.query<{ user_id: string; display_name: string; csrf_hash: Buffer; passkey_count: string; created_at: Date }>(`
+      SELECT s.user_id,u.display_name,s.csrf_hash,s.created_at,
         (SELECT count(*) FROM passkey_credentials p WHERE p.user_id=s.user_id AND p.revoked_at IS NULL) AS passkey_count
       FROM user_sessions s JOIN users u ON u.user_id=s.user_id
       WHERE s.session_hash=$1 AND s.revoked_at IS NULL AND s.expires_at > now() AND u.status='ACTIVE'`, [hash(token)]);
     const row = result.rows[0];
     if (!row || !timingSafeEqual(row.csrf_hash, hash(csrf))) return undefined;
     await this.pool.query('UPDATE user_sessions SET last_seen_at=now() WHERE session_hash=$1', [hash(token)]);
-    return { userId: row.user_id, displayName: row.display_name, csrfToken: csrf, passkeyCount: Number(row.passkey_count), sessionToken: token };
+    return { userId: row.user_id, displayName: row.display_name, csrfToken: csrf, passkeyCount: Number(row.passkey_count), sessionToken: token, authenticatedAt: row.created_at.toISOString() };
   }
 
   publicSession(session?: AuthenticatedUser): PublicSession {

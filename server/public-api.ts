@@ -10,8 +10,9 @@ import { bearerAccessToken, type PrivyIdentityService } from './privy-auth.ts';
 import { ROUTE_CAPABILITIES } from '../src/lib/route-capabilities.ts';
 import { PRODUCT_CAPABILITIES } from '../src/lib/product-capabilities.ts';
 import { SPEECH_LIMITS, type SpeechProvider, type SpeechStatus } from './speech-provider.ts';
+import type { UserFeatureService } from './user-features.ts';
 
-type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; speech?: SpeechProvider; speechStatus?: SpeechStatus; walletControl: DestinationWalletControlService; contractWalletsEnabled?: boolean; privy?: PrivyIdentityService; privyAppId?: string };
+type ApiOptions = { allowedOrigin: string; secureCookies: boolean; auth: UserIdentityService; agent: AgentGateway; userFeatures: UserFeatureService; speech?: SpeechProvider; speechStatus?: SpeechStatus; walletControl: DestinationWalletControlService; contractWalletsEnabled?: boolean; privy?: PrivyIdentityService; privyAppId?: string };
 
 function orderCreation(contractWalletsEnabled: boolean) { return Object.freeze({
   enabled: true as const,
@@ -132,7 +133,54 @@ export function publicApi(store: PublicOrderRequestStore, options: ApiOptions) {
           },
           agent: options.agent.status,
           voice: options.speechStatus ?? { enabled: false, provider: 'groq', reason: 'Voice is disabled.', externalRequestsApproved: false, liveValidated: false, transcription: { model: 'whisper-large-v3-turbo', locales: ['en','fr','ar'], providerDocumentationVerified: true }, synthesis: { locales: ['en','ar'], models: { en: 'canopylabs/orpheus-v1-english', ar: 'canopylabs/orpheus-arabic-saudi' }, providerDocumentationVerified: true }, limits: SPEECH_LIMITS, retention: 'memory-only-until-provider-response' },
+          social: { handles: true, privateContacts: true, handleRequestIntents: true, paymentByHandle: false, publicDirectory: false },
+          notifications: { inApp: true, transactionalOutbox: true, externalChannels: false },
         }); return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/account/handle') {
+        const authenticated=requireSession(session); writeJson(response,200,{handle:await options.userFeatures.getHandle(authenticated.userId)}); return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/handles/availability') {
+        const authenticated=requireCsrf(options,session,request);const body=await readJson(request,1_024);writeJson(response,200,await options.userFeatures.availability(authenticated.userId,body.candidate));return true;
+      }
+      if (request.method === 'PUT' && url.pathname === '/api/v1/account/handle') {
+        const authenticated=requireCsrf(options,session,request);writeJson(response,200,{handle:await options.userFeatures.putHandle(authenticated,await readJson(request,2_048))});return true;
+      }
+      if (request.method === 'PATCH' && url.pathname === '/api/v1/account/handle/discoverability') {
+        const authenticated=requireCsrf(options,session,request);writeJson(response,200,{handle:await options.userFeatures.setDiscoverability(authenticated,await readJson(request,2_048))});return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/contacts') {
+        const authenticated=requireSession(session);writeJson(response,200,{contacts:await options.userFeatures.listContacts(authenticated.userId)});return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/contacts') {
+        const authenticated=requireCsrf(options,session,request);writeJson(response,201,{contact:await options.userFeatures.createContact(authenticated.userId,await readJson(request,2_048))});return true;
+      }
+      const contact=url.pathname.match(/^\/api\/v1\/contacts\/([0-9a-f-]{36})$/i);
+      if (request.method === 'DELETE' && contact) {
+        const authenticated=requireCsrf(options,session,request);await readJson(request,256);await options.userFeatures.removeContact(authenticated.userId,contact[1]);writeJson(response,200,{removed:true});return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/handle-requests') {
+        const authenticated=requireSession(session);writeJson(response,200,{requests:await options.userFeatures.listHandleRequests(authenticated.userId)});return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/handle-requests') {
+        const authenticated=requireCsrf(options,session,request);writeJson(response,201,{request:await options.userFeatures.createHandleRequest(authenticated.userId,await readJson(request,2_048))});return true;
+      }
+      const handleRequest=url.pathname.match(/^\/api\/v1\/handle-requests\/([0-9a-f-]{36})\/respond$/i);
+      if (request.method === 'POST' && handleRequest) {
+        const authenticated=requireCsrf(options,session,request);writeJson(response,200,{request:await options.userFeatures.respondHandleRequest(authenticated.userId,handleRequest[1],await readJson(request,1_024))});return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/inbox') {
+        const authenticated=requireSession(session);const unreadOnly=url.searchParams.get('unread')==='1';const category=url.searchParams.get('category')??undefined;const cursor=url.searchParams.get('cursor')??undefined;writeJson(response,200,await options.userFeatures.listInbox(authenticated.userId,{unreadOnly,...(category?{category}:{}),...(cursor?{cursor}:{})}));return true;
+      }
+      if (request.method === 'GET' && url.pathname === '/api/v1/inbox/unread-count') {
+        const authenticated=requireSession(session);const inbox=await options.userFeatures.listInbox(authenticated.userId,{unreadOnly:true});writeJson(response,200,{unreadCount:inbox.unreadCount});return true;
+      }
+      const inboxRead=url.pathname.match(/^\/api\/v1\/inbox\/([0-9a-f-]{36})\/(read|unread)$/i);
+      if (request.method === 'POST' && inboxRead) {
+        const authenticated=requireCsrf(options,session,request);await readJson(request,256);await options.userFeatures.setInboxRead(authenticated.userId,inboxRead[1],inboxRead[2]==='read');writeJson(response,200,{updated:true});return true;
+      }
+      if (request.method === 'POST' && url.pathname === '/api/v1/inbox/read-all') {
+        const authenticated=requireCsrf(options,session,request);await readJson(request,256);writeJson(response,200,{updated:await options.userFeatures.readAllInbox(authenticated.userId)});return true;
       }
       if (request.method === 'POST' && url.pathname === '/api/v1/agent/messages') {
         if (session) requireCsrf(options, session, request);

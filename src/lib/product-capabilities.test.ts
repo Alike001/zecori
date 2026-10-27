@@ -6,7 +6,8 @@ test('product capabilities use explicit truth statuses and unique identifiers', 
   assert.equal(new Set(PRODUCT_CAPABILITIES.map(item => item.id)).size, PRODUCT_CAPABILITIES.length);
   assert.ok(PRODUCT_CAPABILITIES.every(item => FEATURE_STATUSES.includes(item.status)));
   assert.equal(productCapability('privy-auth').status, 'DISABLED');
-  assert.equal(productCapability('handles').status, 'PLANNED');
+  assert.equal(productCapability('handles').status, 'EXPERIMENTAL');
+  assert.equal(productCapability('inbox').status, 'EXPERIMENTAL');
   assert.equal(productCapability('live-quotes').status, 'DISABLED');
 });
 

@@ -21,8 +21,8 @@ class TestIdentity implements UserIdentityService {
   async session(request: Parameters<UserIdentityService['session']>[0]): Promise<AuthenticatedUser | undefined> {
     const token = request.headers.cookie?.match(/zecathon_session=([0-9a-f]{64})/)?.[1];
     if (!token || this.revoked.has(token)) return undefined;
-    if (token === tokenA) return { userId: '11111111-1111-4111-8111-111111111111', displayName: 'User A', csrfToken: csrfA, passkeyCount: 2, sessionToken: token };
-    if (token === tokenB) return { userId: '22222222-2222-4222-8222-222222222222', displayName: 'User B', csrfToken: csrfB, passkeyCount: 1, sessionToken: token };
+    if (token === tokenA) return { userId: '11111111-1111-4111-8111-111111111111', displayName: 'User A', csrfToken: csrfA, passkeyCount: 2, sessionToken: token, authenticatedAt: new Date().toISOString() };
+    if (token === tokenB) return { userId: '22222222-2222-4222-8222-222222222222', displayName: 'User B', csrfToken: csrfB, passkeyCount: 1, sessionToken: token, authenticatedAt: new Date().toISOString() };
     return undefined;
   }
   publicSession(session?: AuthenticatedUser) { return session ? { authenticated: true, user: { id: session.userId, displayName: session.displayName, passkeyCount: session.passkeyCount }, csrfToken: session.csrfToken } : { authenticated: false }; }
@@ -86,6 +86,24 @@ test('guest exploration stays public while private order creation requires a pas
   }
 });
 
+test('handle, contact, request-intent and inbox APIs require account ownership, origin and CSRF', async t => {
+  const {base,cookieA,cookieB}=await fixture(t,60);
+  const headersA={cookie:cookieA,origin:'http://127.0.0.1:8787','content-type':'application/json','x-csrf-token':csrfA};
+  const headersB={cookie:cookieB,origin:'http://127.0.0.1:8787','content-type':'application/json','x-csrf-token':csrfB};
+  assert.equal((await fetch(`${base}/api/v1/account/handle`)).status,401);
+  assert.equal((await fetch(`${base}/api/v1/account/handle`,{method:'PUT',headers:{...headersA,'x-csrf-token':''},body:'{}'})).status,403);
+  const claimA=await fetch(`${base}/api/v1/account/handle`,{method:'PUT',headers:headersA,body:JSON.stringify({candidate:'owner-alpha',expectedVersion:0,confirmation:'CLAIM @owner-alpha'})});assert.equal(claimA.status,200);
+  const claimB=await fetch(`${base}/api/v1/account/handle`,{method:'PUT',headers:headersB,body:JSON.stringify({candidate:'owner-beta',expectedVersion:0,confirmation:'CLAIM @owner-beta'})});assert.equal(claimB.status,200);
+  const handleA=(await claimA.json() as {handle:{version:number}}).handle;
+  assert.equal((await fetch(`${base}/api/v1/account/handle/discoverability`,{method:'PATCH',headers:headersA,body:JSON.stringify({discoverable:true,expectedVersion:handleA.version,confirmation:'MAKE HANDLE DISCOVERABLE'})})).status,200);
+  const contact=await fetch(`${base}/api/v1/contacts`,{method:'POST',headers:headersB,body:JSON.stringify({handle:'owner-alpha',label:'TEST-ONLY Alpha'})});assert.equal(contact.status,201);const contactId=(await contact.json() as {contact:{contactId:string}}).contact.contactId;
+  assert.equal((await fetch(`${base}/api/v1/contacts`,{headers:{cookie:cookieA}}).then(response=>response.json()) as {contacts:unknown[]}).contacts.length,0,'contact graph is owner isolated');
+  const intent=await fetch(`${base}/api/v1/handle-requests`,{method:'POST',headers:headersB,body:JSON.stringify({contactId,confirmation:'REQUEST FIXED TEST ROUTE'})});assert.equal(intent.status,201);const intentId=(await intent.json() as {request:{intentId:string}}).request.intentId;
+  assert.equal((await fetch(`${base}/api/v1/handle-requests/${intentId}/respond`,{method:'POST',headers:headersB,body:JSON.stringify({action:'ACCEPT',confirmation:'ACCEPT REQUEST — NO PAYMENT'})})).status,404);
+  assert.equal((await fetch(`${base}/api/v1/handle-requests/${intentId}/respond`,{method:'POST',headers:headersA,body:JSON.stringify({action:'ACCEPT',confirmation:'ACCEPT REQUEST — NO PAYMENT'})})).status,200);
+  assert.equal((await fetch(`${base}/api/v1/inbox`)).status,401);
+});
+
 test('Privy stays disabled by default and enabled login/link preserve origin, CSRF, and explicit-link boundaries', async t => {
   const disabled = await fixture(t);
   const disabledCapabilities = await (await fetch(`${disabled.base}/api/v1/capabilities`)).json() as { authentication: { privy: { enabled: boolean } }; routes: Array<{ availability: string; execution: { enabled: boolean } }>; productCapabilities: Array<{ id: string; status: string; summary: string }> };
@@ -94,7 +112,7 @@ test('Privy stays disabled by default and enabled login/link preserve origin, CS
   assert.ok(disabledCapabilities.routes.every(route => ['verified-executable','experimental-disabled','research-only'].includes(route.availability)));
   assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'privy-auth')?.status, 'DISABLED');
   assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'live-quotes')?.status, 'DISABLED');
-  assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'inbox')?.status, 'PLANNED');
+  assert.equal(disabledCapabilities.productCapabilities.find(item => item.id === 'inbox')?.status, 'EXPERIMENTAL');
   assert.ok(disabledCapabilities.productCapabilities.filter(item => ['DISABLED','PLANNED'].includes(item.status)).every(item => !/available now|shipped/i.test(item.summary)));
 
   const calls: string[] = [];

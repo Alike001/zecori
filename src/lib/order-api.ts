@@ -66,6 +66,8 @@ export type PublicCapabilities = {
     limits: { maximumAudioBytes: number; maximumDurationMs: number; minimumDurationMs: number; maximumSpeechCharacters: number };
     retention: 'memory-only-until-provider-response';
   };
+  social: { handles: true; privateContacts: true; handleRequestIntents: true; paymentByHandle: false; publicDirectory: false };
+  notifications: { inApp: true; transactionalOutbox: true; externalChannels: false };
 };
 
 export type AgentReply = {
@@ -110,6 +112,29 @@ export async function getSession(): Promise<UserSession> {
 async function post<T>(path: string, body: unknown, token?: string): Promise<T> {
   return parse<T>(await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json', ...(token ? { 'x-csrf-token': token } : {}) }, body: JSON.stringify(body) }));
 }
+
+async function mutate<T>(method: 'PUT'|'PATCH'|'DELETE', path: string, body: unknown): Promise<T> {
+  return parse<T>(await fetch(path,{method,credentials:'same-origin',headers:{'content-type':'application/json','x-csrf-token':await csrf()},body:JSON.stringify(body)}));
+}
+
+export type AccountHandle={handleId:string;handle:string;normalizedHandle:string;status:'ACTIVE'|'LOCKED'|'RETIRED';discoverable:boolean;version:number;claimedAt:string;updatedAt:string;renameAvailableAt?:string};
+export type PrivateContact={contactId:string;handle:string;label:string;status:'ACTIVE';updatedAt:string};
+export type HandleRequestIntent={intentId:string;direction:'incoming'|'outgoing';counterpartyHandle:string;routeId:'zcash-testnet-to-base-sepolia-fixed';status:'REQUESTED'|'ACCEPTED'|'DECLINED'|'CANCELLED'|'EXPIRED';createdAt:string;expiresAt:string};
+export type InboxItem={inboxItemId:string;category:'ORDER'|'HANDLE'|'REQUEST';titleKey:string;bodyVariables:Record<string,string>;requestId?:string;createdAt:string;read:boolean};
+export type InboxPage={items:InboxItem[];unreadCount:number;nextCursor?:string};
+export async function getAccountHandle(){return(await parse<{handle?:AccountHandle}>(await fetch('/api/v1/account/handle',{credentials:'same-origin'}))).handle}
+export async function checkHandleAvailability(candidate:string){return post<{available:boolean}>('/api/v1/handles/availability',{candidate},await csrf())}
+export async function saveAccountHandle(candidate:string,expectedVersion:number,confirmation:string){return(await mutate<{handle:AccountHandle}>('PUT','/api/v1/account/handle',{candidate,expectedVersion,confirmation})).handle}
+export async function setHandleDiscoverability(discoverable:boolean,expectedVersion:number,confirmation:string){return(await mutate<{handle:AccountHandle}>('PATCH','/api/v1/account/handle/discoverability',{discoverable,expectedVersion,confirmation})).handle}
+export async function listContacts(){return(await parse<{contacts:PrivateContact[]}>(await fetch('/api/v1/contacts',{credentials:'same-origin'}))).contacts}
+export async function addContact(handle:string,label:string){return(await post<{contact:PrivateContact}>('/api/v1/contacts',{handle,label},await csrf())).contact}
+export async function removeContact(contactId:string){await mutate('DELETE',`/api/v1/contacts/${encodeURIComponent(contactId)}`,{})}
+export async function listHandleRequests(){return(await parse<{requests:HandleRequestIntent[]}>(await fetch('/api/v1/handle-requests',{credentials:'same-origin'}))).requests}
+export async function createHandleRequest(contactId:string){return(await post<{request:HandleRequestIntent}>('/api/v1/handle-requests',{contactId,confirmation:'REQUEST FIXED TEST ROUTE'},await csrf())).request}
+export async function respondHandleRequest(intentId:string,action:'ACCEPT'|'DECLINE'){return(await post<{request:HandleRequestIntent}>(`/api/v1/handle-requests/${encodeURIComponent(intentId)}/respond`,{action,confirmation:action==='ACCEPT'?'ACCEPT REQUEST — NO PAYMENT':'DECLINE REQUEST'},await csrf())).request}
+export async function getInbox(filters:{unreadOnly?:boolean;category?:string}={}){const query=new URLSearchParams();if(filters.unreadOnly)query.set('unread','1');if(filters.category)query.set('category',filters.category);return parse<InboxPage>(await fetch(`/api/v1/inbox${query.size?`?${query}`:''}`,{credentials:'same-origin'}))}
+export async function setInboxItemRead(id:string,read:boolean){await post(`/api/v1/inbox/${encodeURIComponent(id)}/${read?'read':'unread'}`,{},await csrf())}
+export async function markAllInboxRead(){return post<{updated:number}>('/api/v1/inbox/read-all',{},await csrf())}
 
 export async function registerPasskey(displayName: string, passkeyLabel: string, adding = false): Promise<void> {
   const token = adding ? await csrf() : undefined;
