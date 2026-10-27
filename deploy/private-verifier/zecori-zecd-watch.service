@@ -1,0 +1,35 @@
+[Unit]
+Description=Zecori seedless Zcash testnet watch-only verifier
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zecori-verifier
+Group=zecori-verifier
+RuntimeDirectory=zecori-zecd
+RuntimeDirectoryMode=0700
+StateDirectory=zecori-zecd
+StateDirectoryMode=0700
+ExecStartPre=/opt/zecori/bin/zecd config check --conf /etc/zecori-verifier/zecd.toml
+ExecStart=/opt/zecori/bin/zecd --conf /etc/zecori-verifier/zecd.toml run
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=90s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictRealtime=true
+ReadWritePaths=/var/lib/zecori-zecd /run/zecori-zecd
+
+[Install]
+WantedBy=multi-user.target

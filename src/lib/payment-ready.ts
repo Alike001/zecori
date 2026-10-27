@@ -86,3 +86,15 @@ export function recipientFromClipboard(value: string): string {
   if (/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2060\ufeff]/u.test(value)) throw new Error('Clipboard text contains hidden or control characters. Type or copy the address again.');
   return value;
 }
+
+/** Compares the three user-visible transfer channels as UTF-8 bytes. */
+export function assertExactReceiverChannels(visibleReceiver: string, clipboardText: string, qrPayload: string): void {
+  const encoder = new TextEncoder();
+  const expected = encoder.encode(visibleReceiver);
+  for (const [label, candidate] of [['clipboard', clipboardText], ['QR payload', qrPayload]] as const) {
+    const bytes = encoder.encode(candidate);
+    if (bytes.length !== expected.length || bytes.some((value, index) => value !== expected[index])) {
+      throw new Error(`${label} does not byte-for-byte match the visible shielded receiver.`);
+    }
+  }
+}

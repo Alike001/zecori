@@ -25,6 +25,7 @@
     "test:postgres": "node --experimental-strip-types --test --test-concurrency=1 server/postgres.integration.test.ts server/user-auth.integration.test.ts server/user-features.integration.test.ts",
     "test:zcash-live": "ZCASH_RPC_LIVE=1 node --experimental-strip-types --test --test-name-pattern='live Experiment 03' server/zcash-verifier.test.ts",
     "operator": "node --experimental-strip-types scripts/settlement-operator.ts",
+    "settlement:readiness": "node --experimental-strip-types scripts/ironwood-settlement-readiness.ts",
     "verifier:relay": "node --experimental-strip-types scripts/private-verifier-relay.ts",
     "privacy:scan": "node scripts/privacy-scan.mjs",
     "security:gate": "node scripts/verify-readonly.mjs",

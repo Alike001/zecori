@@ -1,0 +1,12 @@
+[Unit]
+Description=Poll for Zecori private verification work
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Persistent=false
+Unit=zecori-private-relay.service
+
+[Install]
+WantedBy=timers.target

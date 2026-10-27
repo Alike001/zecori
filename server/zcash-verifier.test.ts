@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { verifyZcashTransaction } from './zcash-verifier.ts';
+import { checkWatchOnlyVerifierHealth, verifierZecdDataDir, verifyZcashTransaction, ZECD_WALLET_B_DATA } from './zcash-verifier.ts';
 import type { RpcCall } from './rpc-client.ts';
 
 const txid = 'a'.repeat(64);
@@ -24,10 +24,35 @@ function rpc(overrides: Record<string, unknown> = {}): RpcCall {
 
 const request = { orderId: 'order-1', transactionId: txid, receiver, amountZatoshis: '1000000', expectedDiversifierIndex: '42', requiredPool: 'ironwood' as const };
 
+test('private verifier data directory override must be an absolute path', () => {
+  assert.equal(verifierZecdDataDir({}), ZECD_WALLET_B_DATA);
+  assert.equal(verifierZecdDataDir({ ZECATHON_VERIFIER_ZECD_DATA_DIR: '/var/lib/zecori-zecd' }), '/var/lib/zecori-zecd');
+  assert.throws(() => verifierZecdDataDir({ ZECATHON_VERIFIER_ZECD_DATA_DIR: '../wallet' }), /absolute private path/);
+});
+
 test('verifies one exact incoming owned Ironwood output in zatoshis', async () => {
   const result = await verifyZcashTransaction(request, { rpc: rpc() });
   assert.equal(result.network, 'zcash-testnet');
   assert.equal(result.amount, '0.01');
+});
+
+test('restart health accepts only a synchronized seedless watch-only verifier', async () => {
+  const health = await checkWatchOnlyVerifierHealth(rpc({
+    getwalletinfo: { walletname: 'default', scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: false },
+  }));
+  assert.equal(health.custody, 'watch-only');
+  assert.equal(health.historyComplete, true);
+  assert.equal(health.bestBlockHash, 'c'.repeat(64));
+
+  await assert.rejects(checkWatchOnlyVerifierHealth(rpc({
+    getwalletinfo: { walletname: 'default', scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: true, unlocked_until: 0 },
+  })), /seedless watch-only/);
+  await assert.rejects(checkWatchOnlyVerifierHealth(rpc({
+    getwalletinfo: { walletname: 'other', scanning: false, enhanced_through: 500, txcount: 1, private_keys_enabled: false },
+  })), /identity/);
+  await assert.rejects(checkWatchOnlyVerifierHealth(rpc({
+    getwalletinfo: { walletname: 'default', scanning: { progress: 1, pending_enhancements: 2 }, enhanced_through: 500, txcount: 1, private_keys_enabled: false },
+  })), /incomplete/);
 });
 
 test('accepts watch-only custody and rejects wrong network, incomplete sync, unlocked or ambiguous custody, and non-owned receiver', async () => {

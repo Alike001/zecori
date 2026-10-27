@@ -192,7 +192,9 @@ The judge web application is live at [https://zecori.iamalikex.tech](https://zec
 
 The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes the live one-process Node web service backed by TLS-only Neon PostgreSQL. It keeps all financial readiness flags disabled. Do not interpret the verified web deployment as settlement readiness.
 
-This public web deployment alone cannot settle a route. A zero-cost watch-only verifier design now has a verified candidate upstream, but no private host, UFVK ceremony, operator liquidity, external Base signer, backup/restore evidence or linked payment has been approved or completed. See [zero-budget shielded settlement feasibility](docs/zero-budget-shielded-settlement.md) and [private verifier hosting](docs/private-verifier-hosting.md).
+This public web deployment alone cannot settle a route. A zero-cost watch-only verifier design now has a verified candidate upstream, and a private operator configuration currently passes read-only test-USDC/gas thresholds. No private host, UFVK ceremony, external Base signer, backup/restore evidence or linked payment has been approved or completed. See [zero-budget shielded settlement feasibility](docs/zero-budget-shielded-settlement.md) and [private verifier hosting](docs/private-verifier-hosting.md).
+
+The checksum-pinned final-`v0.9.0` OCI candidate configuration and systemd units are in [the private verifier deployment packet](deploy/private-verifier/README.md). They contain no viewing key and were validated locally without initializing a wallet.
 
 ### Dedicated deployment: Docker Compose
 
@@ -208,6 +210,7 @@ Set `VCS_REF` to the exact reviewed 40-character revision before building. Never
 - [Order recovery](src/docs/pages/order-recovery.mdx) and [receipts](src/docs/pages/receipts.mdx) — lifecycle and evidence semantics.
 - [API architecture](src/docs/pages/api-architecture.mdx) — application boundaries and service responsibilities.
 - [First linked test readiness](docs/first-linked-test-readiness.md) — future approval sequence; it is not authorization to transact.
+- [Ironwood → Base Sepolia milestone](docs/ironwood-base-sepolia-milestone.md) — current pass/block table, nonfinancial evidence, and the separately authorized first-settlement procedure.
 - [Production verifier](docs/production-verifier.md) and [storage migration](docs/storage-migration.md) — infrastructure and private-data handling.
 - [AI and voice boundaries](docs/ai-and-voice.md) and [AI agent operations](docs/ai-agent-operations.md) — provider gates and no-authority guarantees.
 - [Two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) and [Zecathon submission packet](docs/zecathon-submission.md) — judge-ready language using verified claims only.

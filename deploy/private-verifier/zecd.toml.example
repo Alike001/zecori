@@ -1,0 +1,44 @@
+# Zecori's smallest private verifier profile. Copy to a root-owned mode-0640
+# file on the private OCI VM and validate with the exact pinned binary:
+#   zecd config check --conf /etc/zecori-verifier/zecd.toml
+#
+# This file contains no UFVK. `zecd init --ufvk` is a separate, explicitly
+# authorized ceremony and must read the UFVK from an operator-controlled prompt,
+# never from this file, argv, Git, Render, or a public deployment log.
+
+network = "test"
+datadir = "/var/lib/zecori-zecd"
+default_wallet = "default"
+
+[wallets.default]
+dir = "/var/lib/zecori-zecd/default"
+
+[backend]
+server = "zecrocks"
+connect_timeout_secs = 10
+reconnect_base_secs = 1
+reconnect_max_secs = 60
+tls = "yes"
+tls_roots = "native"
+tls_insecure_skip_verify = false
+
+[rpc]
+bind = "127.0.0.1"
+port = 18393
+cookiefile = "/run/zecori-zecd/rpc.cookie"
+allowed_methods = [
+  "getblockchaininfo",
+  "getwalletinfo",
+  "getaddressinfo",
+  "gettransaction",
+  "getblockhash",
+  "z_listtransactions",
+]
+
+[keys]
+auto_unlock = false
+bootstrap_from_keys = false
+
+[pools]
+enabled = ["orchard"]
+default_receivers = ["orchard"]
