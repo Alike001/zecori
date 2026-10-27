@@ -27,6 +27,8 @@ export type ApplicationServerOptions = {
   trustProxy?: boolean;
   rateLimit?: { windowMs: number; maximum: number };
   agentRateLimit?: { windowMs: number; maximum: number };
+  userFeatureReadRateLimit?: { windowMs: number; maximum: number };
+  userFeatureWriteRateLimit?: { windowMs: number; maximum: number };
   agent?: AgentGateway;
   speech?: SpeechProvider;
   speechStatus?: SpeechStatus;
@@ -55,6 +57,17 @@ class RateLimiter {
     if (this.entries.size > 10_000) for (const [candidate, value] of this.entries) if (value.reset <= now) this.entries.delete(candidate);
     return { allowed: entry.count <= this.maximum, remaining: Math.max(0, this.maximum - entry.count), reset: entry.reset };
   }
+}
+
+function retryAfterSeconds(reset: number, now = Date.now()): number {
+  return Math.max(1, Math.ceil((reset - now) / 1000));
+}
+
+function isUserFeaturePath(pathname: string): boolean {
+  return pathname.startsWith('/api/v1/handles')
+    || pathname.startsWith('/api/v1/contacts')
+    || pathname.startsWith('/api/v1/handle-requests')
+    || pathname.startsWith('/api/v1/account/handle');
 }
 
 function clientKey(request: IncomingMessage, trustProxy: boolean): string {
@@ -100,7 +113,10 @@ export function createApplicationServer(options: ApplicationServerOptions) {
   const staticDirectory = options.staticDirectory ?? join(fileURLToPath(new URL('..', import.meta.url)), 'dist');
   const limiter = new RateLimiter(options.rateLimit?.windowMs ?? 60_000, options.rateLimit?.maximum ?? 60);
   const agentLimiter = new RateLimiter(options.agentRateLimit?.windowMs ?? 60_000, options.agentRateLimit?.maximum ?? 10);
-  const handleLimiter = new RateLimiter(60_000, 10);
+  const userFeatureReadLimit = options.userFeatureReadRateLimit ?? { windowMs: 60_000, maximum: 120 };
+  const userFeatureWriteLimit = options.userFeatureWriteRateLimit ?? { windowMs: 60_000, maximum: 10 };
+  const userFeatureReadLimiter = new RateLimiter(userFeatureReadLimit.windowMs, userFeatureReadLimit.maximum);
+  const userFeatureWriteLimiter = new RateLimiter(userFeatureWriteLimit.windowMs, userFeatureWriteLimit.maximum);
   const walletControl = options.walletControl ?? new UnavailableDestinationWalletControl();
   const userFeatures = options.userFeatures ?? new MemoryUserFeatures();
   const api = publicApi(options.store, { allowedOrigin: options.publicOrigin, secureCookies: Boolean(options.requireProxyHttps), auth: options.auth, agent: options.agent ?? createAgentGateway(), userFeatures, ...(options.speech ? { speech: options.speech } : {}), ...(options.speechStatus ? { speechStatus: options.speechStatus } : {}), walletControl, contractWalletsEnabled: Boolean(options.contractWalletsEnabled), routeReadiness: options.routeReadiness, ...(options.privy ? { privy: options.privy, privyAppId: options.privyAppId } : {}) });
@@ -116,18 +132,35 @@ export function createApplicationServer(options: ApplicationServerOptions) {
     response.setHeader('ratelimit-limit', String(options.rateLimit?.maximum ?? 60));
     response.setHeader('ratelimit-remaining', String(limit.remaining));
     response.setHeader('ratelimit-reset', String(Math.ceil(limit.reset / 1000)));
-    if (!limit.allowed) return json(response, 429, { error: { code: 'RATE_LIMITED', message: 'Too many requests.' } });
+    if (!limit.allowed) {
+      const retry = retryAfterSeconds(limit.reset);
+      response.setHeader('retry-after', String(retry));
+      return json(response, 429, { error: { code: 'RATE_LIMITED', message: `Too many requests. Try again in ${retry} seconds.`, retryAfterSeconds: retry } });
+    }
     if (options.requireProxyHttps && request.headers['x-forwarded-proto'] !== 'https') return json(response, 400, { error: { code: 'HTTPS_REQUIRED', message: 'HTTPS is required.' } });
     if (url.pathname === '/api/v1/agent/messages' || url.pathname.startsWith('/api/v1/voice/')) {
       const agentLimit = agentLimiter.accept(`agent:${clientKey(request, Boolean(options.trustProxy))}`);
       response.setHeader('x-agent-ratelimit-limit', String(options.agentRateLimit?.maximum ?? 10));
       response.setHeader('x-agent-ratelimit-remaining', String(agentLimit.remaining));
-      if (!agentLimit.allowed) return json(response, 429, { error: { code: 'AGENT_RATE_LIMITED', message: 'Too many assistant requests.' } });
+      if (!agentLimit.allowed) {
+        const retry = retryAfterSeconds(agentLimit.reset);
+        response.setHeader('retry-after', String(retry));
+        return json(response, 429, { error: { code: 'AGENT_RATE_LIMITED', message: `Too many assistant requests. Try again in ${retry} seconds.`, retryAfterSeconds: retry } });
+      }
     }
-    if (url.pathname.startsWith('/api/v1/handles') || url.pathname.startsWith('/api/v1/contacts') || url.pathname.startsWith('/api/v1/handle-requests') || url.pathname === '/api/v1/account/handle') {
-      const handleLimit = handleLimiter.accept(`handle:${clientKey(request, Boolean(options.trustProxy))}`);
-      response.setHeader('x-handle-ratelimit-limit', '10'); response.setHeader('x-handle-ratelimit-remaining', String(handleLimit.remaining));
-      if (!handleLimit.allowed) return json(response, 429, { error: { code: 'HANDLE_RATE_LIMITED', message: 'Too many handle requests.' } });
+    if (isUserFeaturePath(url.pathname)) {
+      const read = request.method === 'GET' || request.method === 'HEAD';
+      const policy = read ? userFeatureReadLimit : userFeatureWriteLimit;
+      const userFeatureLimit = (read ? userFeatureReadLimiter : userFeatureWriteLimiter).accept(`user-feature-${read ? 'read' : 'write'}:${clientKey(request, Boolean(options.trustProxy))}`);
+      response.setHeader('x-user-feature-ratelimit-policy', read ? 'read' : 'write');
+      response.setHeader('x-user-feature-ratelimit-limit', String(policy.maximum));
+      response.setHeader('x-user-feature-ratelimit-remaining', String(userFeatureLimit.remaining));
+      response.setHeader('x-user-feature-ratelimit-reset', String(Math.ceil(userFeatureLimit.reset / 1000)));
+      if (!userFeatureLimit.allowed) {
+        const retry = retryAfterSeconds(userFeatureLimit.reset);
+        response.setHeader('retry-after', String(retry));
+        return json(response, 429, { error: { code: 'HANDLE_RATE_LIMITED', message: `Too many ${read ? 'account refreshes' : 'handle or contact changes'}. Try again in ${retry} seconds.`, retryAfterSeconds: retry } });
+      }
     }
     if (await api(request, response)) return;
     if (!['GET', 'HEAD'].includes(request.method ?? '')) return json(response, 405, { error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } });
