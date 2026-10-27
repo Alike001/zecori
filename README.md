@@ -181,7 +181,7 @@ The judge web application is live at [https://zecori.iamalikex.tech](https://zec
 
 The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes the live one-process Node web service backed by TLS-only Neon PostgreSQL. It keeps all financial readiness flags disabled. Do not interpret the verified web deployment as settlement readiness.
 
-This public web deployment alone cannot settle a route. A persistent private verifier host, synchronized Zcash testnet backend, separately authorized watch-only setup, operator liquidity, external Base signer, backup/restore evidence, and manual operating procedure are still required. See [private verifier hosting](docs/private-verifier-hosting.md).
+This public web deployment alone cannot settle a route. A zero-cost watch-only verifier design now has a verified candidate upstream, but no private host, UFVK ceremony, operator liquidity, external Base signer, backup/restore evidence or linked payment has been approved or completed. See [zero-budget shielded settlement feasibility](docs/zero-budget-shielded-settlement.md) and [private verifier hosting](docs/private-verifier-hosting.md).
 
 ### Dedicated deployment: Docker Compose
 

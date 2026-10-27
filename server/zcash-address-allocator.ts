@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import { walletBRpc, ZECD_WALLET_B_NAME } from './zcash-verifier.ts';
 import { exactJsonInteger, type RpcCall } from './rpc-client.ts';
+import { assertFreshTestnetZecdChain, type ZecdChainInfo } from './zecd-chain-readiness.ts';
 
-type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
 type WalletInfo = { walletname?: string; private_keys_enabled?: boolean; scanning?: false | object; enhanced_through?: number | null; import_error?: unknown; unlocked_until?: number };
 type AddressInfo = { address?: string; ismine?: boolean; isvalid_orchard?: boolean; receiver_types?: string[]; receivers_consistent?: boolean; diversifier_index?: number | string };
 type HistoryEntry = { address?: string; diversifier_index?: number | string };
@@ -35,9 +35,10 @@ export function exactDiversifierIndex(value: number | string | undefined): strin
 
 async function inspectWalletB(rpc: RpcCall, _now: number): Promise<{ blocks: number; history: HistoryEntry[] }> {
   const [chain, wallet] = await Promise.all([
-    rpc<ChainInfo>('getblockchaininfo'), rpc<WalletInfo>('getwalletinfo'),
+    rpc<ZecdChainInfo>('getblockchaininfo'), rpc<WalletInfo>('getwalletinfo'),
   ]);
-  if (chain.chain !== 'test' || chain.initialblockdownload !== false || !Number.isSafeInteger(chain.blocks) || chain.blocks !== chain.headers) throw new Error('Wallet B is not synchronized on Zcash testnet');
+  try { assertFreshTestnetZecdChain(chain, _now); }
+  catch (error) { throw new Error(`Wallet B is not ready on current Zcash testnet: ${(error as Error).message}`); }
   if (wallet.walletname !== ZECD_WALLET_B_NAME || wallet.private_keys_enabled !== true) throw new Error('Wallet B identity or ownership does not match the configured spending wallet');
   if (wallet.scanning !== false || wallet.import_error || wallet.enhanced_through !== chain.blocks) throw new Error('Wallet B history is incomplete');
   if (wallet.unlocked_until !== 0) throw new Error('Wallet B must remain encrypted and locked');

@@ -5,6 +5,7 @@ import { checkSourceWalletA, exactZecToZatoshis } from './zcash-source-wallet.ts
 import type { RpcCall } from './rpc-client.ts';
 
 type Fixture = { responses: Record<string, unknown> };
+const chainTime = Math.floor(Date.now() / 1000);
 
 async function fixture(name: string): Promise<Fixture> {
   const fixtures = JSON.parse(await readFile(new URL('./fixtures/zcash-source-wallet-rpc.json', import.meta.url), 'utf8')) as Record<string, Fixture>;
@@ -18,7 +19,7 @@ function note(pool: string, amount: string, confirmations = 10) {
 function walletRpc(overrides: Record<string, unknown> = {}): { call: RpcCall; requests: Array<[string, unknown[] | undefined]> } {
   const requests: Array<[string, unknown[] | undefined]> = [];
   const values: Record<string, unknown> = {
-    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
+    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: chainTime, warnings: '' },
     getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 },
     getbalance: '0.01010000',
     listunspent: [note('ironwood', '0.01010000')],
@@ -57,7 +58,8 @@ test('does not count transparent, Sapling, or Orchard value as FullPrivacy-compa
 });
 
 test('requires testnet sync, configured wallet identity, ownership, complete history and locked state', async () => {
-  await assert.rejects(checkSourceWalletA(walletRpc({ getblockchaininfo: { chain: 'main', blocks: 500, headers: 500, initialblockdownload: false } }).call), /testnet/);
+  await assert.rejects(checkSourceWalletA(walletRpc({ getblockchaininfo: { chain: 'main', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: chainTime } }).call), /testnet/);
+  await assert.rejects(checkSourceWalletA(walletRpc({ getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: chainTime - 1_801 } }).call), /stale/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'other', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 } }).call), /identity/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: false, scanning: false, enhanced_through: 500, unlocked_until: 0 } }).call), /owned spending wallet/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: { progress: 0.9 }, enhanced_through: 499, unlocked_until: 0 } }).call), /incomplete/);

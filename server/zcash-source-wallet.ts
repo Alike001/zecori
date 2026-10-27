@@ -2,13 +2,13 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { jsonRpcClient, type RpcCall } from './rpc-client.ts';
 import { loadSourceWalletConfig, type SourceWalletConfig } from './zcash-source-config.ts';
+import { assertFreshTestnetZecdChain, type ZecdChainInfo } from './zecd-chain-readiness.ts';
 
 export const SOURCE_PAYMENT_ZATOSHIS = 1_000_000n;
 export const SOURCE_FEE_RESERVE_ZATOSHIS = 10_000n;
 export const SOURCE_REQUIRED_ZATOSHIS = SOURCE_PAYMENT_ZATOSHIS + SOURCE_FEE_RESERVE_ZATOSHIS;
 export const SOURCE_MINIMUM_CONFIRMATIONS = 10;
 
-type ChainInfo = { chain?: string; blocks?: number; headers?: number; initialblockdownload?: boolean };
 type WalletInfo = {
   walletname?: string;
   private_keys_enabled?: boolean;
@@ -78,7 +78,7 @@ export type SourceWalletHealth = {
   fullPrivacyCompatible: boolean;
 };
 
-export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: string): Promise<SourceWalletHealth> {
+export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: string, now = Date.now()): Promise<SourceWalletHealth> {
   let call = rpc;
   let walletName = expectedWalletName ?? 'default';
   if (!call) {
@@ -87,14 +87,13 @@ export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: str
     call = await configuredRpc(config);
   }
   const [chain, wallet, aggregateValue, unspent] = await Promise.all([
-    call<ChainInfo>('getblockchaininfo'),
+    call<ZecdChainInfo>('getblockchaininfo'),
     call<WalletInfo>('getwalletinfo'),
     call<number | string>('getbalance', ['*', SOURCE_MINIMUM_CONFIRMATIONS]),
     call<Unspent[]>('listunspent', [SOURCE_MINIMUM_CONFIRMATIONS, 9_999_999, [], false]),
   ]);
-  if (chain.chain !== 'test' || chain.initialblockdownload !== false || !Number.isSafeInteger(chain.blocks) || chain.blocks !== chain.headers) {
-    throw new Error('Wallet A is not synchronized on Zcash testnet');
-  }
+  try { assertFreshTestnetZecdChain(chain, now); }
+  catch (error) { throw new Error(`Wallet A is not ready on current Zcash testnet: ${(error as Error).message}`); }
   if (wallet.walletname !== walletName) throw new Error('Wallet A identity does not match the configured wallet name');
   if (wallet.private_keys_enabled !== true) throw new Error('Wallet A is not an owned spending wallet');
   if (wallet.scanning !== false || wallet.import_error || wallet.enhanced_through !== chain.blocks) throw new Error('Wallet A history is incomplete');

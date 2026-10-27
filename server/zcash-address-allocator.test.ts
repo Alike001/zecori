@@ -4,11 +4,12 @@ import { deriveExactOrchardAddress, validateUnusedWalletBAddress, validateUnused
 import type { RpcCall } from './rpc-client.ts';
 
 const address = 'utest1freshorchardreceiver123456789';
+const chainTime = Math.floor(Date.now() / 1000);
 
 function rpc(history: unknown[] = [], overrides: Record<string, unknown> = {}): { call: RpcCall; methods: string[] } {
   const methods: string[] = [];
   const values: Record<string, unknown> = {
-    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false },
+    getblockchaininfo: { chain: 'test', blocks: 500, headers: 500, initialblockdownload: false, bestblockhash: 'b'.repeat(64), time: chainTime, warnings: '' },
     getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 0 },
     getaddressinfo: { address, ismine: true, isvalid_orchard: true, receiver_types: ['orchard'], receivers_consistent: true, diversifier_index: '42' },
     z_listtransactions: history,
@@ -37,7 +38,7 @@ test('checks an exact unused diversifier before journaling and derives only that
 
 test('validates a fresh owned Orchard-only address and records a future-height boundary', async () => {
   const mock = rpc();
-  const result = await validateUnusedWalletBAddress(address, { rpc: mock.call, allocationId: 'allocation-1', now: 1_900_000_000_000 });
+  const result = await validateUnusedWalletBAddress(address, { rpc: mock.call, allocationId: 'allocation-1', now: chainTime * 1000 });
   assert.equal(result.diversifierIndex, '42');
   assert.equal(result.sourceNotBeforeHeight, 501);
   assert.equal(result.state, 'AVAILABLE');
