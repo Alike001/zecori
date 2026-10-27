@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localeDirection, localeMetadata, productText, resolveLocale, translate, translateInboxEvent, translateOrderStatus } from './i18n.ts';
+import { localeDirection, localeMetadata, productText, publicResolutionReason, resolveLocale, translate, translateInboxEvent, translateOrderGuidance, translateOrderStatus } from './i18n.ts';
 
 test('localization resolves incremental locales and safely falls back', () => {
   assert.equal(resolveLocale('en-NG'), 'en');
@@ -18,6 +18,28 @@ test('localization resolves incremental locales and safely falls back', () => {
 test('every supported backend lifecycle state has an explicit UI label in every locale', () => {
   const statuses=['AWAITING_OPERATOR','ACCEPTED','PAYMENT_READY','SOURCE_DETECTED','SOURCE_CONFIRMED','PAYOUT_AWAITING_APPROVAL','PAYOUT_SUBMITTED','COMPLETED','FAILED','REFUND_PENDING','REFUNDED','UNRESOLVED','EXPIRED','CANCELLED'];
   for(const locale of ['en','fr','ar'] as const) for(const status of statuses) assert.notEqual(translateOrderStatus(locale,status),status,`${locale} ${status}`);
+});
+
+test('every lifecycle state has localized, fail-closed user guidance', () => {
+  const statuses=['AWAITING_OPERATOR','ACCEPTED','PAYMENT_READY','SOURCE_DETECTED','SOURCE_CONFIRMED','PAYOUT_AWAITING_APPROVAL','PAYOUT_SUBMITTED','COMPLETED','FAILED','REFUND_PENDING','REFUNDED','UNRESOLVED','EXPIRED','CANCELLED'];
+  for (const locale of ['en','fr','ar'] as const) for (const status of statuses) {
+    const guidance=translateOrderGuidance(locale,status);
+    assert.ok(guidance.title.length > 8,`${locale} ${status} title`);
+    assert.ok(guidance.body.length > 30,`${locale} ${status} body`);
+  }
+  for (const status of ['SOURCE_DETECTED','PAYOUT_AWAITING_APPROVAL','FAILED','REFUND_PENDING','UNRESOLVED','EXPIRED']) {
+    assert.match(translateOrderGuidance('en',status).body,/do not|not yet|no settlement/i,status);
+  }
+  assert.match(translateOrderGuidance('en','UNRESOLVED').body,/reorganization/i);
+  assert.match(translateOrderGuidance('en','PAYMENT_READY').body,/amount.*destination.*fees.*refund policy.*expiry/i);
+});
+
+test('request tracking translates known reason codes and never renders private operator text', () => {
+  assert.match(publicResolutionReason('private-verifier:REORG_DETECTED'), /reorganization/i);
+  const privateText='private operator note with wallet evidence';
+  const rendered=publicResolutionReason(privateText);
+  assert.doesNotMatch(rendered,/operator note|wallet evidence/i);
+  assert.match(rendered,/no settlement outcome/i);
 });
 
 test('security-critical locale strings preserve financial tokens and disclose incomplete review', () => {

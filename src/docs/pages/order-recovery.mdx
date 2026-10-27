@@ -7,3 +7,10 @@ Use another registered passkey. Privy can become an additional explicit identity
 ## Settlement recovery
 
 `FAILED`, `REFUND_PENDING`, `UNRESOLVED`, `EXPIRED`, and `CANCELLED` each stop automatic progression. Keep the request ID and do not resend funds.
+
+- `FAILED`, `EXPIRED`, or `CANCELLED`: do not use any old payment instructions. No payout is claimed.
+- `REFUND_PENDING`: manual review is required. A refund is not confirmed or guaranteed.
+- `UNRESOLVED`: evidence may be delayed, unavailable, ambiguous, or affected by a chain reorganization. Do not retry a payout or source payment.
+- `PAYOUT_SUBMITTED`: a transaction candidate exists, but completion is not proven until independent Base chain, contract, recipient, amount, and confirmation checks pass.
+
+Open **Activity**, choose **Track / recover**, and refresh the authenticated request. Share the private request ID only with the authorized operator. Never send a seed phrase, spending key, viewing key, full shielded evidence, or wallet export. A shareable receipt is deliberately redacted and is available only after completion.
