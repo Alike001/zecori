@@ -2,10 +2,16 @@ export const meta = { slug: 'evidence', title: 'Evidence', eyebrow: 'Review reco
 
 ## Automated evidence
 
-The review report records disposable migrations, unit/API/PostgreSQL tests, browser and WebAuthn smoke, accessibility checks, MDX link/build validation, typecheck, build, privacy/security scans, Docker provenance, and dependency audit results.
+The 2026-10-28 review records 217 local tests (204 pass and 13 explicit live/integration skips), a separate fresh-PostgreSQL 11/11 pass, browser/mobile/accessibility acceptance, WCAG 2.2 AA contrast, MDX validation, typecheck, production build, privacy/read-only security gates, clean production dependency audit, and a live guarded judge smoke with route requests disabled.
+
+The full dependency graph still contains known Zod advisories through the compiled-out Privy development connector. Privy remains disabled; the production dependency tree is clean. Dedicated-production preflight remains blocked on the feature branch, changed tree, and intentionally absent dedicated-host secret/backup paths.
 
 ## Not tested live
 
-Real Privy identities, durable staging, real wallets, live-chain source detection, funded orders, allocations, payouts, mainnet, live Groq chat/speech, physical microphones, English/Arabic pronunciation, email, handles, and inbox delivery remain outside this review.
+Real Privy identities, persistent watch-only zecd, real wallet acceptance, live-chain source detection, funded orders, allocations, payouts, linked receipts, mainnet, live Groq chat/speech, physical microphones, English/Arabic pronunciation, and additional networks remain outside this review.
+
+The public Render origin is health/TLS/smoke verified. The exact deployed SHA and dashboard-only Render/Neon state are not attested because no account/API credential was available. DNS is a CNAME to Render and is not backend hosting.
 
 Noir Wallet compatibility is limited to documentation, contract fixtures, and an isolated-profile test procedure until the official testnet extension is separately downloaded, checksum-verified, and exercised without funds.
+
+The variable-amount quote engine is isolated, default-off test code. It is not a live quote or product capability, and the public fixed route is unchanged.

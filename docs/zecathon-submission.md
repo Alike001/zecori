@@ -1,10 +1,10 @@
 # Zecori — Zecathon submission packet
 
-Status: draft evidence packet for the live judge build. It is not a submitted entry and does not claim eligibility or rule compliance. No authenticated Cross-Chain submission receipt is present locally.
+Status: final draft evidence packet for the live closed-route judge build, checked 2026-10-28. It is not a submitted entry. The repository and demo are public; the uploaded two-minute video URL and authenticated Cross-Chain submission receipt are still absent, so the final decision is **NO-GO**. See the [final sprint report](final-submission-sprint.md).
 
 ## Official requirements checked
 
-Checked 2026-10-26 against the official event site and its live published submission form:
+Rechecked 2026-10-28 against the official event site's live public data and submission form code:
 
 - Event: [Zecathon](https://thezecathon.com/)
 - Deadline: 2026-10-28 at 23:59 UTC.
@@ -16,11 +16,14 @@ Checked 2026-10-26 against the official event site and its live published submis
 
 The authenticated submission must still be completed by the registered human account. The public repository and reachable HTTPS demo are verified; a final video URL and form submission receipt are not recorded.
 
+The Cross-Chain track describes swaps, bridges, and intents that reach another chain without unshielding in transit. Zecori's code and integration tests implement that boundary, but no live linked Zcash-to-Base transfer exists. Present the site as a working nonfinancial demo with genuine interoperability still blocked—not as a completed swap.
+
 ### Verified links
 
 - Repository: [github.com/Alike001/zecori](https://github.com/Alike001/zecori)
 - Working demo: [zecori.iamalikex.tech](https://zecori.iamalikex.tech)
 - Hosting evidence: HTTPS, `/health/live` 200, `/health/ready` 200, ten Neon migrations, guarded judge smoke, a real passkey sign-in, and a handle claim.
+- Current GitHub main: `8374687469b701b61c39e8495cf783ab1d9f316b`; final sprint changes are local-only and are not claimed live.
 
 ## Submission copy
 
@@ -94,6 +97,7 @@ The public application cannot derive a Zcash address, unlock a wallet, allocate,
 - The Render + Neon judge app is deployed and health/smoke verified. Two-profile live isolation, public linked-payment acceptance, Base payout, external AI, voice, and additional-network acceptance remain unverified.
 - Payment by handle, ERC-1271 contract wallets, mainnet, live quotes, automatic settlement/refunds, external notifications, email, and settings are disabled or planned.
 - Zecori is a provisional brand without trademark or domain clearance.
+- The isolated variable-amount engine is future test code only. The submitted demo supports only the unchanged fixed test route and makes no market-price claim.
 
 ## Screenshot evidence inventory
 
@@ -113,7 +117,7 @@ Do not use fabricated completed-payment screenshots. A receipt screenshot may us
 - Migration hashes and disposable PostgreSQL execution for 001–010.
 - Unit, API, integration, WebAuthn/browser, localization, AI/voice contract, privacy, read-only security, typecheck, and production-build outputs.
 - Static staging and production preflight reports, without accessing or migrating staging.
-- Dependency audit output with unresolved advisories recorded rather than suppressed.
+- Full dependency audit with known disabled/dev-only Privy connector advisories recorded; production-only dependency audit is clean.
 - Human acceptance still required for login providers, chain reads, and the separately approved first settlement.
 
 ## Two-minute demo script
@@ -128,7 +132,9 @@ Do not use fabricated completed-payment screenshots. A receipt screenshot may us
 
 **1:35–1:50 — Honest Help.** Ask a suggested privacy and refund question. “These are reviewed deterministic answers, not a live generative agent. Help has no wallet or settlement authority.”
 
-**1:50–2:00 — Honest limits.** Open the truth matrix. “The public web app is health verified. The first funded linked settlement, two-profile live acceptance, Base payout, Privy, live AI/voice, mainnet, automatic settlement, and refunds remain gated.”
+**1:50–2:00 — Honest limits.** Open the truth matrix. “The public web app is health verified. The first funded linked settlement, two-profile live acceptance, Base payout, Privy, live AI/voice, variable amounts, mainnet, automatic settlement, and refunds remain gated.”
+
+Before submitting, follow the checkbox list in [the final sprint report](final-submission-sprint.md#two-minute-recording-checklist), verify anonymous video playback, and save the authenticated form receipt. Do not use fixture receipts as transfer evidence.
 
 ## Roadmap
 
