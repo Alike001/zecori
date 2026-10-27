@@ -1,0 +1,21 @@
+export const meta = { slug: 'privacy-custody', title: 'Privacy and custody', eyebrow: 'Know the boundary', summary: 'Shielding reduces public-chain disclosure; it does not hide every service relationship.', featureIds: ['fixed-test-route', 'automated-settlement'] }
+
+## What stays private
+
+The Zcash source uses the Ironwood shielded pool. Private account history and destination data are owner-scoped, and stored settlement evidence is encrypted at rest. Public receipts redact source correlation. Optional contact labels are encrypted and owner-scoped; handles expose no address, order history, or contact graph.
+
+## Handle and inbox privacy
+
+Handle lookup is exact-match, opt-in, rate-limited, and deliberately returns the same unavailable result for reserved and claimed names. Inbox event payloads reject address, recipient, signature, transaction-hash, transaction-ID, and email fields. External notification delivery is disabled.
+
+## What becomes public
+
+The Base Sepolia destination transaction is transparent: recipient, token amount, and transaction hash are public on the destination chain. Identity, wallet, and RPC providers may also observe metadata.
+
+## Trusted LP custody
+
+The experimental trusted liquidity provider and authorized verification services see evidence required for settlement. The LP temporarily controls received test funds. Payouts require separate approval and verification; refunds are manual and not guaranteed.
+
+<DocNotice title="Mainnet remains disabled" tone="warning">
+  No mainnet route, wallet validation, provider liquidity, production secrets, funded recovery exercise, payout control, or independent end-to-end settlement evidence has been accepted.
+</DocNotice>

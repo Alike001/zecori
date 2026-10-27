@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { localeDirection, localeMetadata, resolveLocale, translate, translateOrderStatus } from './i18n.ts';
+import { localeDirection, localeMetadata, productText, resolveLocale, translate, translateInboxEvent, translateOrderStatus } from './i18n.ts';
 
 test('localization resolves incremental locales and safely falls back', () => {
   assert.equal(resolveLocale('en-NG'), 'en');
@@ -29,4 +29,15 @@ test('security-critical locale strings preserve financial tokens and disclose in
   assert.equal(localeMetadata.en.translationReview, 'human-validated');
   assert.notEqual(localeMetadata.fr.translationReview, 'human-validated');
   assert.notEqual(localeMetadata.ar.translationReview, 'human-validated');
+});
+
+test('handles, inbox, assistant and navigation have English, French and Arabic labels', () => {
+  const keys = ['routes','account','activity','inbox','assistant','handleTitle','confirmation','contacts','privateInbox','inboxTitle','markRead','assistantTitle'] as const;
+  const events = ['inbox.order.received','inbox.order.completed','inbox.handle.claimed','inbox.request.received','inbox.request.accepted','inbox.request.declined'];
+  for (const locale of ['en','fr','ar'] as const) {
+    for (const key of keys) assert.ok(productText(locale,key).trim().length > 2,`${locale} ${key}`);
+    for (const event of events) assert.notEqual(translateInboxEvent(locale,event),'Account event',`${locale} ${event}`);
+  }
+  assert.equal(localeDirection('ar'),'rtl');
+  assert.match(productText('ar','pendingHumanReview'),/مراجعة/);
 });

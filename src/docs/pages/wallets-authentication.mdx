@@ -1,0 +1,23 @@
+export const meta = { slug: 'wallets-authentication', title: 'Wallet onboarding', eyebrow: 'Identity and wallet boundary', summary: 'Explore first, then add only the account and wallet access required for the next explicit step.', featureIds: ['passkey-auth', 'privy-auth', 'destination-proof'] }
+
+## Start without a wallet
+
+You can inspect the route, terms, custody model, limitations, and assistant explanations while signed out. Zecori asks for an account only when you request an owner-scoped review.
+
+## Passkeys protect the Zecori account
+
+Passkeys are the verified account path. Add a second passkey while authenticated so one lost device does not strand the account. A Zecori account protects private order history; it does not control a wallet.
+
+## Zcash source wallet
+
+The manual external-wallet path remains available. The browser path accepts only a reviewed read-only adapter that attests to Zcash testnet, the Ironwood shielded pool, and a read-only contract. It never defines or calls a signing or broadcast method.
+
+Noir Wallet compatibility is being prepared separately. A detected wallet is not treated as testnet-compatible unless the exact installed testnet build and read-only boundary can be verified.
+
+## Base receiving wallet
+
+A connected Base wallet is inspected with `eth_chainId` and `eth_accounts` only. Manual recipients are validated locally. A later, purpose-limited EIP-712 signature proves control of the exact Base Sepolia recipient; it does not authorize payment, payout, token transfer, or transaction signing.
+
+## Privy
+
+Email and Google sign-in are integrated behind a disabled feature flag. Tokens are verified server-side and linked to internal UUID accounts only after explicit authenticated consent. No embedded wallet is created.

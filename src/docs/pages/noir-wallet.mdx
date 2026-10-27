@@ -1,0 +1,41 @@
+export const meta = { slug: 'noir-wallet', title: 'Noir Wallet compatibility', eyebrow: 'Read-only beta assessment', summary: 'What Noir Wallet v1.0.40 changes, what Zecori can safely test, and why the integration remains unverified.', featureIds: ['noir-wallet', 'fixed-test-route'] }
+
+## Current assessment
+
+Noir Wallet v1.0.40 Beta is a candidate for Zecori's source-wallet experience, not an approved adapter. The first linked swap remains **NO-GO**. Zecori does not import, unlock, fund, sign with, or broadcast through Noir Wallet.
+
+<DocNotice title="Testnet build only" tone="safe">
+  Noir distributes separate mainnet and testnet extensions. Compatibility work must use the official asset whose filename ends in `-testnet.zip`, loaded into a fresh browser profile with a newly created, unfunded test-only wallet. Never reuse an existing profile or recovery phrase.
+</DocNotice>
+
+## v1.0.40 changes relevant to Zecori
+
+- The full quoted recipient is visible before confirmation and long addresses remain readable while the confirmation control stays available. This supports Zecori's exact-recipient review requirement, but Zecori has not independently accepted the flow.
+- Recovery words remain outside readable page content and the accessibility tree until the user deliberately reveals them.
+- Synchronization pauses are respected during transaction preparation, reducing competing balance and history work.
+- Wallet cleanup, dApp approval handling, and response timeouts were hardened.
+
+The release still excludes cross-restart transaction recovery and automatic resend. A funded Shield Funds stall has not been fully reproduced or verified as resolved.
+
+## Read-only compatibility boundary
+
+Provider detection must not connect an account or open the wallet. An existing authorization may be restored with the silent `getAccounts()` call. Zecori's compatibility probe must not call `connect()`, `getBalance()`, `getAddresses()`, `getMaxTransfer()`, `signMessage()`, `sendTransaction()`, `shieldFunds()`, or `disconnect()`.
+
+Noir v1's silent account response contains addresses and authorized account records, but it does not attest which extension build supplied them. Because network selection is fixed at extension-build time and runtime switching is deprecated, Zecori cannot infer testnet from an address string alone. The production adapter therefore remains unavailable until an isolated testnet package/profile check establishes a trustworthy build identity or another reviewed attestation.
+
+## Isolated browser procedure
+
+1. Download the official v1.0.40 testnet ZIP and its checksum from the maintainer release.
+2. Verify the checksum before extraction; do not use GitHub-generated source archives as extension packages.
+3. Launch Chrome with a new temporary `--user-data-dir`; load only the unpacked testnet extension.
+4. Create a new unfunded test-only wallet. Write its new recovery phrase offline for disposal; never import an existing phrase.
+5. Open only the local Zecori origin and run the read-only compatibility smoke.
+6. Confirm the request ledger contains detection and, if already authorized, `zcash_getAccounts` only.
+7. Delete the temporary browser profile after evidence capture. Do not exercise Send, Shield Funds, Swap, signing, or broadcasts.
+
+## Primary sources
+
+- [Noir Wallet v1.0.40 Beta release](https://github.com/NoirWallet/noir-wallet-sdk/releases/tag/v1.0.40-beta.local.20261024101618.bf99d98)
+- [Official SDK integration guide](https://docs.zknoir.com/noir-sdk-integration/)
+- [Provider API](https://docs.zknoir.com/developers/provider-api/)
+- [Integration security](https://docs.zknoir.com/developers/security/)

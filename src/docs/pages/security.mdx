@@ -1,0 +1,19 @@
+export const meta = { slug: 'security', title: 'Security', eyebrow: 'Fail closed', summary: 'Public actions are narrow, private reads are owner-scoped, and financial execution stays operator-only.', featureIds: ['passkey-auth', 'privy-auth', 'destination-proof', 'automated-settlement'] }
+
+## Browser and session
+
+Exact origins, CSRF, HttpOnly sessions, request bounds, rate limits, passkey verification, and explicit destination proof protect the public edge.
+
+## Privy disposition
+
+Privy stays disabled: no tenant credentials were supplied and its current React connector graph retains unresolved Zod, UUID, and URI-decoding advisories. A forced cross-major override is unsupported. The reviewed submission build compiles this client path out, keeps the SDK build-only, and verifies that neither it nor the flagged packages are present in the production dependency tree or release image. Re-enabling Privy requires an upstream-compatible clean audit, a reviewed build change, and real tenant acceptance.
+
+## Settlement separation
+
+The public API exposes no operator mutations. Allocation, payout authorization, and evidence verification remain independently gated.
+
+Handles do not resolve to wallet addresses and cannot replace an immutable destination. Their mutations require recent authentication, version checks, explicit confirmation, reserved-name and confusable defenses, cooldowns, and account ownership. The inbox consumes only allow-listed redacted outbox events and is owner-scoped on every read and mutation.
+
+## Supply-chain posture
+
+MDX compilation uses the official `@mdx-js/rollup` integration at build time. MDX pages can render only the reviewed component map supplied by Zecori. No remote MDX, runtime evaluation, automatic skill installer, or wallet package is loaded by the documentation site.
