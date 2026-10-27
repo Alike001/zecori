@@ -2,7 +2,7 @@ export const meta = { slug: 'noir-wallet', title: 'Noir Wallet compatibility', e
 
 ## Current assessment
 
-Zecori now uses pinned `@noir-wallet/sdk` 0.1.9 to detect Noir Wallet, silently restore only an existing site authorization, request account consent from an explicit Connect click, read the authorized account's local balance summary, and invalidate readiness after an account change or timeout. Wallet data stays in browser memory. The first linked funded test remains **NO-GO**: Zecori does not import, unlock, fund, sign with, or broadcast through Noir Wallet.
+Zecori now uses pinned `@noir-wallet/sdk` 0.1.9 to detect Noir Wallet, silently restore only an existing site authorization, request account consent from an explicit Connect click, read the authorized account's local balance summary, and invalidate readiness after an account change, chain change, or timeout. Wallet data stays in browser memory. The first linked funded test remains **NO-GO**: Zecori does not import, unlock, fund, sign with, or broadcast through Noir Wallet.
 
 <DocNotice title="Testnet build only" tone="safe">
   Noir distributes separate mainnet and testnet extensions. Compatibility work must use the official asset whose filename ends in `-testnet.zip`, loaded into a fresh browser profile with a newly created, unfunded test-only wallet. Never reuse an existing profile or recovery phrase.
@@ -26,6 +26,8 @@ The pinned SDK exposes `isNoirWallet`, extension `version`, and the Zcash API. T
 The Move flow distinguishes shielded total, available total, pending total, synchronization, and insufficiency without storing or transmitting those values. A sufficient-looking balance is provisional because the current SDK result does not provide an Ironwood-specific spendable amount. The browser option therefore reports an honest unsupported configuration and cannot satisfy route readiness. The Base Sepolia connected and manual-recipient paths are unchanged.
 
 A separate review-only payment model binds the order ID, exact `0.01` TAZ amount, dedicated receiver, expiry, destination, provider, and immutable route terms to a future request whose funding source can only be `shielded`. It rejects transparent funding. No wallet method receives this object and the send control is disabled.
+
+At `PAYMENT_READY`, the wallet-neutral external path renders the exact backend-authorized receiver as visible text, an exact-copy control, and a plain-text receiver QR. The QR does not include an amount or claim a wallet URI format. Exact network, amount, destination chain/token/recipient, order ID, and expiry stay visible beside it. The surface hides actionable instructions after expiry or lifecycle advance. No named external wallet is currently claimed compatible.
 
 ## Safe testnet-only SDK path
 

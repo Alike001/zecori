@@ -19,7 +19,7 @@ Consequently `1.0.40` is accepted as API-version compatibility evidence, not as 
 - At startup call silent `getAccounts()` only. `null` means no prior authorization; no consent window opens.
 - From an explicit Connect click call `connect()`, then read `getBalance(account.id)` only for an authorized account.
 - Keep account and balance data in React memory only. The UI hides addresses and shows only the wallet label, authorized count, shielded, available, pending, synchronization and conservative sufficiency state.
-- Subscribe to `accountsChanged`, invalidate immediately, and refresh with `getAccounts()` rather than trusting cached state.
+- Subscribe to `accountsChanged` and `chainChanged`, invalidate immediately, and refresh with `getAccounts()` rather than trusting cached state.
 - Expire readiness after 30 seconds.
 - Reject missing extension, rejected consent, malformed data, unsynchronized balance, non-1.0.40 builds, insufficient shielded/available amounts, and unverifiable network/pool configuration.
 - Preserve manual shielded-source instructions, connected Base Sepolia checks, manual Base recipient validation, and destination-control proof behavior.
@@ -38,6 +38,8 @@ Browser evidence captured under `artifacts/noir-wallet-connection/` includes des
 - a future SDK request with `fundingSource: "shielded"`.
 
 Transparent funding, stale instructions, missing receiver, or term/expiry mismatch throw before a request can be prepared. There is no execution function and the consumer control is disabled.
+
+The wallet-neutral `PAYMENT_READY` surface is separate from Noir. It shows the full allocated receiver, exact Zcash testnet/Ironwood source amount, Base Sepolia chain and token contract, exact destination recipient, order ID, expiry, copy control, and a QR that encodes the receiver verbatim. This does not establish compatibility for Noir or any other external wallet. Instructions disappear from the actionable view after expiry or any source-payment lifecycle advance, preventing a second manual send prompt.
 
 ## Remaining acceptance gaps
 

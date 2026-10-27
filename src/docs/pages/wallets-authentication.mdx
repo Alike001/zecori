@@ -10,13 +10,16 @@ Passkeys are the verified account path. Add a second passkey while authenticated
 
 ## Zcash source wallet
 
-The manual external-wallet path remains available. The browser path accepts only a reviewed read-only adapter that attests to Zcash testnet, the Ironwood shielded pool, and a read-only contract. It never defines or calls a signing or broadcast method.
+The source selector is wallet-neutral and has two honest paths:
 
-Noir Wallet compatibility is being prepared separately. A detected wallet is not treated as testnet-compatible unless the exact installed testnet build and read-only boundary can be verified.
+- **Connect Noir Wallet** is an integrated guarded readiness check. It detects, connects, reads only authorized account readiness, and invalidates on account, chain, or stale-balance changes. Sending stays disabled because the current provider cannot prove the exact testnet build or Ironwood spendability to Zecori.
+- **Use another Zcash wallet** is an external-instructions path. No named wallet is claimed compatible. Only an owner-scoped, unexpired `PAYMENT_READY` request can reveal the full allocated shielded receiver, exact amount and chain, immutable order terms, copy control, and receiver-only QR. There is no transparent-funding fallback.
+
+The public demo never publishes a receiver. An external-wallet selection is not a compatibility or payment-success claim.
 
 ## Base receiving wallet
 
-A connected Base wallet is inspected with `eth_chainId` and `eth_accounts` only. Manual recipients are validated locally. A later, purpose-limited EIP-712 signature proves control of the exact Base Sepolia recipient; it does not authorize payment, payout, token transfer, or transaction signing.
+A connected Base wallet is the preferred recipient path and is inspected with `eth_chainId` and `eth_accounts` only. Manual recipients are intent only: they are validated locally for exact EIP-55 checksum, zero address, and hidden clipboard changes, but do not prove ownership. Both paths bind Base Sepolia chain 84532, the exact test-USDC contract and recipient. A later, purpose-limited EIP-712 signature proves control of that exact recipient; account or chain switching invalidates the attempt, and Zecori never substitutes another address. The signature does not authorize payment, payout, token transfer, or transaction signing.
 
 ## Privy
 

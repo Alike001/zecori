@@ -76,13 +76,14 @@ test('a compatible version remains unsupported without testnet and Ironwood atte
   assert.match(result.message, /cannot attest.*official testnet.*Ironwood/i);
 });
 
-test('wallet switching invalidates through accountsChanged and stale readiness expires', async () => {
+test('wallet account or chain switching invalidates and stale readiness expires', async () => {
   const listeners = new Map<string, (...args: unknown[]) => void>();
   const provider = wallet({ listeners });
   let invalidations = 0;
   const unsubscribe = subscribeToNoirAccountChanges(provider, () => { invalidations += 1; });
   listeners.get('accountsChanged')?.([]);
-  assert.equal(invalidations, 1);
+  listeners.get('chainChanged')?.({ chainId: 'test' });
+  assert.equal(invalidations, 2);
   unsubscribe();
   assert.equal(listeners.size, 0);
   const readiness = await inspectNoirWallet(provider, 'silent', 100);

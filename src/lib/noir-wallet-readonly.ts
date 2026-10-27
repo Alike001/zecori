@@ -212,7 +212,11 @@ export function expireNoirReadiness(readiness: NoirWalletReadiness, now = Date.n
 
 export function subscribeToNoirAccountChanges(wallet: NoirWalletProvider, listener: () => void): () => void {
   wallet.zcash.on('accountsChanged', listener);
-  return () => wallet.zcash.removeListener('accountsChanged', listener);
+  wallet.zcash.on('chainChanged', listener);
+  return () => {
+    wallet.zcash.removeListener('accountsChanged', listener);
+    wallet.zcash.removeListener('chainChanged', listener);
+  };
 }
 
 export const inspectNoirWalletReadOnly = (wallet: NoirWalletProvider | undefined) => inspectNoirWallet(wallet ?? null, 'silent');
