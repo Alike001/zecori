@@ -2,6 +2,20 @@
 
 Status: **LIVE_WALLET_STARTUP_READY**. This status means the pinned commands and read-only compatibility gates are ready for a separately approved wallet start. Neither wallet was started, unlocked, modified, or queried during this milestone.
 
+## Consumer wallet compatibility matrix
+
+| Wallet path | Current testnet status | What is verified | Payment status |
+| --- | --- | --- | --- |
+| Noir Wallet 1.0.40 + SDK 0.1.9 | **Integrated, guarded / not payment-compatible** | Provider detection, silent restore, explicit connection, authorized-account balance read, rejection, unsynced/stale balance handling, and account/chain invalidation with disposable fixtures | Disabled. The provider cannot attest the exact testnet build or Ironwood spendability to the origin. |
+| Another Zcash wallet | **External instructions only / wallet unverified** | Owner-scoped `PAYMENT_READY` presents the exact allocated shielded receiver, Zcash testnet, Ironwood-only source, exact amount, immutable destination terms, expiry, exact-copy behavior, and receiver-only QR payload | Manual future path only. No named wallet is claimed compatible. The public demo cannot publish instructions. |
+| Connected EIP-1193 Base wallet | **Supported for Base Sepolia EOA destination proof** | Exact chain 84532, already-authorized account, EIP-55 normalization, zero-address rejection, pre/post-sign account and chain checks, EIP-712 signer recovery, and account-switch invalidation | Preferred destination-entry path. The signature grants no spending or payout authority. |
+| Manually entered Base address | **Intent entry only** | Exact EIP-55 validation, zero-address rejection, hidden-character-safe paste, immutable chain/token/recipient binding, and later proof by the exact wallet | Not ownership proof. It cannot bypass EIP-712 verification or substitute a recipient. |
+| ERC-1271 Base contract wallet | **Implemented behind disabled flag; live compatibility unverified** | Pinned-block verification and recheck logic in disposable tests | Disabled for this release pending live contract-wallet acceptance. |
+
+“Integrated” does not mean “can pay.” No Lace, Zashi, YWallet, Zingo, hardware wallet, browser wallet, mobile wallet, or other named Zcash wallet has passed Zecori’s linked testnet payment acceptance. They remain planned or unverified until disposable-wallet evidence exists.
+
+The external-wallet QR encodes the exact allocated shielded receiver as plain text. It deliberately does not invent a Zcash payment URI or include an amount, because no cross-wallet URI behavior has been accepted. The amount and immutable order terms remain separately visible for human review.
+
 ## Pinned implementation audit
 
 The installed binary reports `zecd 0.9.0-rc2` and has SHA-256 `9829f8aa984a77ca937dab878994023e7cb650ac493ec642edf19e9b585011e1`. The exact upstream tag `v0.9.0-rc2` resolves to commit `56e809fb4a3abf122505a28163321149a8823413`.

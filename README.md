@@ -80,8 +80,19 @@ Local evidence includes unit, API, PostgreSQL integration, virtual WebAuthn/brow
 - The signed private Zcash verifier relay against a persistent synchronized testnet backend.
 - Two-profile isolation and linked account flows on the public deployment. A real final-domain passkey sign-in and handle claim are verified, but broader live acceptance remains pending.
 - Provider-backed AI and Groq speech. Both require explicit operator opt-in, credentials, and live acceptance; voice remains disabled in the product UI.
-- Noir Wallet v1.0.40 compatibility. The read-only adapter fails closed pending an isolated, checksum-verified testnet extension test.
+- Noir Wallet v1.0.40 compatibility. The read-only adapter remains fail-closed after isolated checksum-verified extension testing because the injected provider cannot attest the exact testnet build or Ironwood spendability to the origin.
 - Privy email and Google sign-in. The client path is compiled out and disabled pending a clean supported dependency graph and live tenant acceptance.
+
+### Consumer wallet compatibility
+
+| Path | Status |
+| --- | --- |
+| Noir Wallet 1.0.40 / SDK 0.1.9 | Integrated guarded readiness only; payment sending is disabled because the browser provider cannot attest the exact testnet build or Ironwood spendability. |
+| Another Zcash wallet | External `PAYMENT_READY` instructions only. No named wallet is claimed compatible; the QR contains the exact allocated receiver as plain text. |
+| Connected Base wallet | Preferred Base Sepolia EOA recipient path with exact account/chain checks and EIP-712 control proof. |
+| Manual Base recipient | Intent only, not ownership proof; exact-wallet EIP-712 proof is still mandatory. |
+
+See [the full wallet compatibility matrix](docs/live-wallet-compatibility.md). The public demo keeps order creation and payment instructions closed, and there is no transparent-funding fallback.
 
 Mainnet, live quotes, automatic settlement, automatic refunds, payment by handle, external notifications, and active multichain support are not implemented product capabilities.
 
