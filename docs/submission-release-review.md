@@ -1,10 +1,10 @@
 # Zecori submission release review
 
 Review date: 2026-10-27
-Branch: `feat/milestone-08a-consumer-privy`
-Decision: **conditional / do not deploy yet**
+Branch: `feat/final-privacy-consumer-ux`
+Decision: **local candidate verified / review before push**
 
-This is the final local release-freeze record for Milestones 09A–09C. It does not authorize a push, merge, deployment, wallet operation, or funded settlement.
+This record includes the final privacy-first consumer UX sprint. The existing Render + Neon judge deployment is live and healthy; this branch has not been pushed or deployed. It does not authorize a push, merge, wallet operation, provider activation, or funded settlement.
 
 ## Audited release commits
 
@@ -30,13 +30,14 @@ Existing commits, branches, ignored private data, wallet paths, and `.thoughts/`
 
 | Check | Result |
 |---|---|
-| Full unit/API/integration suite on disposable PostgreSQL 17 | PASS — 182 tests, 180 pass, 2 explicitly skipped live-chain checks |
+| Full unit/API suite | PASS — 195 tests, 182 pass, 13 expected skips when PostgreSQL/live-chain variables are absent |
 | Serial disposable PostgreSQL integration | PASS — 11/11 on a fresh empty database |
-| Migration 010 on a new isolated database | PASS — migrations 001–010 applied; handle, outbox, and inbox tables present |
-| Browser UX/accessibility/mobile/RTL | PASS — `MILESTONE_09C_BROWSER_UX_SECURITY_SMOKE_PASSED` |
+| Migrations on a new isolated database | PASS — migrations 001–010 applied |
+| Browser UX/accessibility/mobile/RTL | PASS — closed/open route states, 320/390/768px overflow, keyboard focus, reduced motion, French and Arabic RTL |
+| WCAG 2.2 AA token-pair contrast | PASS — 14 dark/light foreground/background pairs; minimum 5.20:1 |
 | Virtual WebAuthn browser journey | PASS on explicit isolated origin — two credentials, logout/relogin, history recovery, unverified destination blocked |
 | MDX routes and links | PASS — 17 pages, 13 required routes |
-| TypeScript and production Vite build | PASS — one 387.78 kB application JS chunk; no Privy client chunk |
+| TypeScript and production Vite build | PASS — 408.70 kB application JS chunk |
 | Privacy scan and read-only security gate | PASS |
 | Production dependency audit | PASS — no known vulnerabilities |
 | Full development dependency audit | BLOCKED — 2 high and 3 moderate findings, all under disabled build-only `@privy-io/react-auth` |
@@ -53,7 +54,7 @@ The server-side identity verifier remains feature-flagged and disabled. The Reac
 
 The code enforces exact same-origin API access, an HTTPS `PUBLIC_ORIGIN` plus `TRUST_PROXY=1` in production, and an explicit `WEBAUTHN_RP_ID` equal to the public hostname or its registrable parent. Compose now binds the RP ID to `DOMAIN`, passes an exact 40-character `VCS_REF`, mounts secrets instead of baking them into the image, and keeps PostgreSQL on an internal network with a named persistent volume.
 
-Public launch is still blocked until the final domain/TLS path, reverse-proxy forwarded headers, secret file ownership/modes, backup/restore, fresh migration, two physical passkeys, persistent restart behavior, monitoring, and hosted smoke tests are verified on a new environment. Mainnet and all automatic financial execution remain disabled.
+The public demo is live at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech). HTTPS, forwarded security headers, `/health/live`, `/health/ready`, migrations 001–010, guarded judge smoke, one physical passkey sign-in, and one handle claim are verified. Two-profile hosted isolation, backup/restore evidence, linked shielded payment, Base payout, external AI/voice, and additional networks remain unverified. Mainnet and all automatic financial execution remain disabled.
 
 ## Staging-safety incident
 
@@ -67,16 +68,14 @@ PR #1 remains open at remote head `121472e54a5c37796adfb2b651e29284a94cd1c1`. Ru
 
 ## Human-controlled PR update
 
-From the reviewed repository:
+After reviewing the local commits, the next safe publication command is:
 
 ```bash
 git status --short
-git log --oneline origin/feat/milestone-08a-consumer-privy..HEAD
-git diff --check origin/feat/milestone-08a-consumer-privy..HEAD
-git push --dry-run origin HEAD:feat/milestone-08a-consumer-privy
-git push origin HEAD:feat/milestone-08a-consumer-privy
-gh pr view 1 --json url,state,headRefOid,statusCheckRollup
-gh pr checks 1 --watch --interval 10
+git log --oneline origin/main..HEAD
+git diff --check origin/main..HEAD
+git push --dry-run -u origin feat/final-privacy-consumer-ux
+git push -u origin feat/final-privacy-consumer-ux
 ```
 
-Do not push until the staging-safety incident and final diff are reviewed. Do not merge from these commands.
+Do not push until the final diff and public-release risks are reviewed. Pushing the branch is not permission to merge, deploy, enable financial flags, or run a transaction.

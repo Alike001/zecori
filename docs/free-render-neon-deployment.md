@@ -1,6 +1,6 @@
 # Free Render + Neon judge deployment
 
-Status: prepared, not deployed. This runbook does not authorize a repository push, DNS change, database migration, provider activation, wallet access, signing, broadcasting, or settlement.
+Status: deployed and web-health verified at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech) on 2026-10-27. Ten Neon migrations, HTTPS, liveness, readiness, guarded judge smoke, one real passkey sign-in, and one handle claim are recorded as verified. This runbook does not authorize another repository push, DNS change, database migration, provider activation, wallet access, signing, broadcasting, or settlement.
 
 ## Compatibility decision
 
@@ -45,7 +45,7 @@ Expected result: exactly migrations `001_production_foundation` through `010_han
 
 ## Render dashboard setup
 
-These steps require the deployment commit to exist in a repository Render can read. Publishing or pushing it remains a separate operator action.
+These steps document the deployed configuration and remain the recovery/recreation procedure. Publishing or pushing a new revision remains a separate operator action.
 
 1. Create a free Render account/workspace without adding a payment method. Connect only the repository containing the reviewed Zecori commit.
 2. Select **New > Blueprint**, choose the repository and `feat/milestone-08a-consumer-privy`, and let Render read the root `render.yaml`.

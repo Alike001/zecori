@@ -23,9 +23,26 @@ Provider detection must not connect an account or open the wallet. An existing a
 
 Noir v1's silent account response contains addresses and authorized account records, but it does not attest which extension build supplied them. Because network selection is fixed at extension-build time and runtime switching is deprecated, Zecori cannot infer testnet from an address string alone. The production adapter therefore remains unavailable until an isolated testnet package/profile check establishes a trustworthy build identity or another reviewed attestation.
 
+For that reason, the consumer app now labels browser Zcash wallet access **unavailable** instead of presenting the internal `window.zecathonZcashReadOnly` contract as an operational wallet option. Manual shielded-source instructions remain documented for a future authorized request, but they never appear as a payment action while route requests are closed.
+
+## Safe testnet-only SDK path
+
+This is an acceptance path, not permission to enable the integration:
+
+1. Pin the official prerelease tag, testnet ZIP, `SHA256SUMS`, and build-provenance asset. Verify both the published digest and source commit before loading the extension.
+2. Use a fresh disposable browser profile and a newly generated, unfunded test-only wallet. No production profile, existing recovery phrase, mainnet build, or reusable secret may enter the test environment.
+3. Add a narrow adapter that detects the provider without connecting. It may call silent `zcash_getAccounts` only after an existing user authorization. It must never call a signing, sending, shielding, balance, address-enumeration, or disconnect method during detection.
+4. Require an independently reviewable attestation for the exact testnet build and Ironwood-compatible shielded account. Address shape alone is not network or pool evidence. If either fact is missing, keep the option disabled.
+5. Preserve explicit user control. A future source payment must be initiated and confirmed inside Noir only after Zecori publishes an operator-accepted, time-bounded shielded receiver. Zecori must never trigger an automatic spend.
+6. Require a direct Ironwood shielded output to the dedicated receiver. Do not create or suggest a transparent intermediate transfer, transparent self-send, or browser-side shielding detour.
+7. Keep secrets inside the wallet boundary. Zecori must never receive or log a recovery phrase, spending key, viewing key, raw transaction, or wallet database. Test telemetry may record only method names, result classes, build identity evidence, and redacted timestamps.
+8. Independently verify the exact output, amount, receiver allocation, confirmations, and absence of a transparent intermediate hop using a separately authorized testnet verifier. UI state or wallet success text is not settlement evidence.
+9. Record negative evidence for rejection, timeout, network/build mismatch, account change, and extension restart. No retry may spend automatically, and uncertain outcomes must stop for manual reconciliation.
+10. Enable the adapter only after the isolated evidence is reviewed, the production build contains the approved adapter, and a second reviewer confirms that route and liquidity gates still default off.
+
 ## Isolated browser procedure
 
-1. Download the official v1.0.40 testnet ZIP and its checksum from the maintainer release.
+1. Download the official v1.0.40 testnet ZIP, checksum, and build provenance from the maintainer release.
 2. Verify the checksum before extraction; do not use GitHub-generated source archives as extension packages.
 3. Launch Chrome with a new temporary `--user-data-dir`; load only the unpacked testnet extension.
 4. Create a new unfunded test-only wallet. Write its new recovery phrase offline for disposal; never import an existing phrase.

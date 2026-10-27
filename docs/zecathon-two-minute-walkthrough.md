@@ -1,6 +1,6 @@
 # Verified two-minute Zecathon walkthrough
 
-Use the local production build or an independently approved HTTPS demo. Do not show fabricated orders, provider responses, transfers, or receipts.
+Use the verified HTTPS demo at [zecori.iamalikex.tech](https://zecori.iamalikex.tech). Do not show fabricated orders, provider responses, transfers, or receipts.
 
 ## 0:00–0:20 — The privacy boundary
 
@@ -10,32 +10,32 @@ Show the landing hero and exact route.
 
 ## 0:20–0:45 — Explore before signing in
 
-Open Routes, inspect the implemented route, and point to the operator-readiness state, fixed-test-rate, custody, confirmation, and no-funds warnings.
+Choose **Open app**, inspect the immediate availability summary, and point to the fixed test terms, custody, and no-funds warning.
 
-> “Guests can inspect the implemented flow. Request creation stays closed unless this deployment has a current operator readiness attestation, and Zecori never invents a provider quote.”
+> “Guests see availability before any form. This deployment is not available for transfers, and 0.01 TAZ to 1 test USDC is an experimental fixed test outcome—not a live exchange quote.”
 
-## 0:45–1:10 — Account and recipient safety
+## 0:45–1:08 — Nonfinancial walkthrough
 
-Use an isolated fixture account or the already-recorded screenshot. Show passkey sign-in, the manual Base Sepolia recipient, and the destination-control explanation.
+Expand **Explore how it works**. Show that wallet, recipient, receiver, and payment controls are absent.
 
-> “The signature proves control of this exact destination only. It cannot transfer tokens, change the recipient, authorize payout, or give the app wallet authority.”
+> “This explains a future approved flow without starting one. A source receiver would appear only after a private request, destination proof, operator acceptance, and allocation checks. No success is fabricated.”
 
-## 1:10–1:30 — Handles and inbox
+## 1:08–1:30 — Account, Activity, and inbox
 
-Show the confirmed optional handle and private inbox screenshots.
+Use a disposable passkey account or verified local screenshots. Show the saved handle, Activity, and the notification bell.
 
 > “Handles use exact opt-in discovery and never reveal an address. A handle can create a non-paying request intent, while real account and order events reach a durable owner-only inbox through a transactional outbox.”
 
-## 1:30–1:48 — Assistant and evidence
+## 1:30–1:48 — Guided Help
 
-Ask the deterministic assistant what the supported route is, then open Activity or the evidence documentation.
+Open Help and use the suggested privacy or refund question.
 
-> “Typed cards are grounded in server facts. The assistant cannot sign, pay, allocate an address, approve settlement, or manufacture success. Private receipts appear only from backend-owned lifecycle evidence. Accepted payment instructions require no memo and show exact assets, networks, amounts, fee status, expiry, refund policy, and the operator-correlation boundary before any manual send.”
+> “The default experience uses reviewed deterministic answers, not a live generative agent. Help cannot sign, pay, allocate an address, approve settlement, or manufacture success. Voice is hidden because no approved provider is configured.”
 
 ## 1:48–2:00 — Honest limits
 
 Open the roadmap/evidence page.
 
-> “Mainnet, payment by handle, automatic settlement and refunds, Privy, live provider calls, external alerts, the public judge deployment, and the first funded linked swap remain off or unverified. Public receipts also remove exact amounts and timestamps to reduce correlation. The release fails closed where evidence is missing.”
+> “The public web app, HTTPS, health checks, ten Neon migrations, guarded smoke, passkey sign-in, and one handle claim are verified. Two-profile live isolation, linked shielded payments, Base payout, external AI, voice, additional networks, and the first funded swap remain off or unverified.”
 
 End on “Private origin. Verified arrival.”

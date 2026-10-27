@@ -10,16 +10,17 @@ The product is designed to make privacy boundaries, custody, readiness, and sett
 
 ## Current status
 
-This README describes the repository at commit `0cfb801`.
+This README describes the final privacy-first consumer UX candidate prepared on 2026-10-27.
 
 | Area | Verified state |
 | --- | --- |
-| Product and route lifecycle | Implemented and locally tested |
+| Product and route lifecycle | Implemented and locally tested; public route remains closed |
 | Route request creation | Disabled by default; requires current operator, liquidity, and fixed-term attestations |
 | Linked funded Zcash-to-Base settlement | **Not performed or verified** |
-| Public deployment | **Not deployed or verified** |
+| Public deployment | **Live and HTTPS-verified at [zecori.iamalikex.tech](https://zecori.iamalikex.tech)** |
+| Public data/auth | Ten Neon migrations applied; liveness, readiness, guarded smoke, passkey sign-in, and one handle claim verified |
 | Mainnet or additional chains | **Not supported** |
-| Demo and video | No verified public demo or video URL is available |
+| Demo and video | Working demo verified; no final video URL is recorded yet |
 
 The only implemented financial route is:
 
@@ -29,19 +30,20 @@ The only implemented financial route is:
 - **Terms:** a fixed integration-test outcome, not a market quote or liquidity promise.
 - **Provider model:** an experimental trusted testnet liquidity provider with temporary custody and separate manual payout approval.
 
-Do not send funds based on this repository or an unverified deployment. Payment instructions are designed to appear only after an authenticated request, destination proof, operator acceptance, and validated receiver allocation.
+Do not send funds based on repository text, the public demo, or the nonfinancial walkthrough. Payment instructions are designed to appear only after an authenticated request, destination proof, operator acceptance, and validated receiver allocation.
 
 ## How the guarded workflow works
 
-1. A visitor reviews the exact route, privacy boundary, custody model, and current readiness without signing in.
-2. The user signs in with a passkey and explicitly confirms a Base Sepolia recipient.
-3. A purpose-limited EIP-712 signature proves control of the destination address. It cannot spend tokens or authorize a payout. ERC-1271 support exists behind a disabled flag and has not passed live contract-wallet validation.
-4. The backend creates an owner-scoped request with immutable terms. Request creation fails closed unless the deployment has current operator, liquidity, and term-expiry attestations.
-5. An operator separately accepts the request and allocates a dedicated shielded receiver through guarded, audited controls. Only then can payment instructions be published.
-6. Read-only verification checks the exact incoming Ironwood output and its confirmations. A separate operator approval is required before an external signer can submit the Base Sepolia payout.
-7. The backend verifies the canonical test-USDC transfer against the immutable recipient, amount, token contract, and approved sender before producing a private receipt.
+1. A visitor opens the app and immediately sees current availability, exact fixed test terms, privacy boundaries, and custody limits without signing in.
+2. While requests are closed, Zecori shows a nonfinancial walkthrough and no wallet, recipient, or payment form. If a future approved deployment reports the route open, wallet setup and review appear progressively.
+3. The user signs in with a passkey only when an owner-scoped request is appropriate and explicitly confirms a Base Sepolia recipient.
+4. A purpose-limited EIP-712 signature proves control of the destination address. It cannot spend tokens or authorize a payout. ERC-1271 support exists behind a disabled flag and has not passed live contract-wallet validation.
+5. The backend creates an owner-scoped request with immutable terms. Request creation fails closed unless the deployment has current operator, liquidity, and term-expiry attestations.
+6. An operator separately accepts the request and allocates a dedicated shielded receiver through guarded, audited controls. Only then can payment instructions be published.
+7. Read-only verification checks the exact incoming Ironwood output and its confirmations. A separate operator approval is required before an external signer can submit the Base Sepolia payout.
+8. The backend verifies the canonical test-USDC transfer against the immutable recipient, amount, token contract, and approved sender before producing a private receipt.
 
-The code and fixture-backed tests cover this lifecycle. The final hosted infrastructure, live chain integrations, operator liquidity, external payout signer, and first newly linked funded settlement remain unverified.
+The code and fixture-backed tests cover this lifecycle. Settlement infrastructure, live chain integrations, operator liquidity, the external payout signer, and the first newly linked funded settlement remain unverified.
 
 ## Privacy and trust model
 
@@ -76,8 +78,7 @@ Local evidence includes unit, API, PostgreSQL integration, virtual WebAuthn/brow
 - The full shielded-source to Base Sepolia lifecycle for a newly linked order.
 - Final-host EIP-712 wallet behavior and optional ERC-1271 contract-wallet checks.
 - The signed private Zcash verifier relay against a persistent synchronized testnet backend.
-- Physical passkeys, final-domain WebAuthn behavior, and two-profile isolation on a public HTTPS deployment.
-- The prepared Render and Neon judge configuration.
+- Two-profile isolation and linked account flows on the public deployment. A real final-domain passkey sign-in and handle claim are verified, but broader live acceptance remains pending.
 - Provider-backed AI and Groq speech. Both require explicit operator opt-in, credentials, and live acceptance; voice remains disabled in the product UI.
 - Noir Wallet v1.0.40 compatibility. The read-only adapter fails closed pending an isolated, checksum-verified testnet extension test.
 - Privy email and Google sign-in. The client path is compiled out and disabled pending a clean supported dependency graph and live tenant acceptance.
@@ -174,11 +175,11 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 ## Deployment
 
-Deployment configuration is prepared, but no live deployment is claimed.
+The judge web application is live at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech). HTTPS, `/health/live`, `/health/ready`, the ten Neon migrations, and the guarded judge smoke have been verified. The Render startup contract keeps route requests and liquidity disabled.
 
 ### Judge deployment: Render + Neon
 
-The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes one Node web service backed by a new TLS-only PostgreSQL database. It keeps all financial readiness flags disabled and includes final-domain health, passkey, isolation, persistence, and recovery acceptance steps. The configured hostname must not be treated as live until those checks pass.
+The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes the live one-process Node web service backed by TLS-only Neon PostgreSQL. It keeps all financial readiness flags disabled. Do not interpret the verified web deployment as settlement readiness.
 
 This public web deployment alone cannot settle a route. A persistent private verifier host, synchronized Zcash testnet backend, separately authorized watch-only setup, operator liquidity, external Base signer, backup/restore evidence, and manual operating procedure are still required. See [private verifier hosting](docs/private-verifier-hosting.md).
 
@@ -204,7 +205,7 @@ The built application also exposes the local manual at `/docs/getting-started`.
 
 ## For contributors and judges
 
-Start with the public route and documentation, then use the local production-mode instructions above for the closest safe product walkthrough. Treat fixture-backed receipts and UI previews as demonstrations of state handling, not proof of a funded settlement. The [roadmap](ROADMAP.md) is the source of truth for evidence status.
+Start at the [live application](https://zecori.iamalikex.tech), choose **Open app**, inspect the closed route state, expand **Explore how it works**, open Help, then use a disposable passkey account for Account, Activity, and the notification bell. Treat fixture-backed receipts and UI previews as demonstrations of state handling, not proof of a funded settlement. The [roadmap](ROADMAP.md) is the source of truth for evidence status.
 
 Contributions should preserve the fail-closed capability registry, owner isolation, operator separation, and explicit status language. New chains or tokens are not supported until their recipient proof, verifier, liquidity, signer separation, recovery behavior, and receipt evidence independently pass the same gates.
 
