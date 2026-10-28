@@ -78,15 +78,23 @@ Queue signed private-relay detection with the real txid. Independently require t
 
 ### 6. Payout authorization and operator MetaMask rehearsal
 
-Only after canonical source confirmation, separately queue, authorize, and approve the one-time payout. Build the Base packet from the decrypted approved order and the loaded confirmed operator configuration. It binds order/authorization IDs, LP sender plus confirmation timestamp/source, chain `84532`, official token, exact EIP-55 recipient, exact USDC atomic units, ERC-20 `transfer` calldata, value zero, reserved nonce, gas/fee bounds, expiry, serialized unsigned transaction, and digest.
+Only after canonical source confirmation, separately queue, authorize, and approve the one-time payout. Build the Base packet from the decrypted approved order and the loaded confirmed operator configuration. It binds order/authorization IDs, LP sender plus confirmation timestamp/source, chain `84532`, official token, exact EIP-55 recipient, exact USDC atomic units, ERC-20 `transfer` calldata, value zero, reserved nonce, gas/fee bounds, expiry, serialized unsigned transaction, and digest. The packet command is operator-only and does not sign or broadcast:
+
+```bash
+corepack pnpm operator -- prepare-base-payout \
+  --order '<ORDER_UUID>' --authorization '<PAYOUT_AUTH_UUID>' \
+  --nonce '<FRESH_PENDING_NONCE_DECIMAL>' --gas '<REVIEWED_GAS_LIMIT_DECIMAL>' \
+  --max-fee '<REVIEWED_MAX_FEE_WEI>' --priority-fee '<REVIEWED_PRIORITY_FEE_WEI>' \
+  --confirm 'EXECUTE PREPARE-BASE-PAYOUT'
+```
 
 The operator-only `rehearse-metamask-payout` command consumes an already persisted approved packet and fresh observations copied from the separate MetaMask Chrome profile/provider. It checks chain `84532`, the selected account against the exact LP sender, latest and pending nonce against the reserved nonce, current base fee, gas estimate, fee ceilings, official token, recipient, amount, calldata, and zero transaction value. It journals a single request digest and prints the exact wallet transaction request without opening MetaMask, signing, broadcasting, or moving funds. The observed quantities are JSON-RPC hex quantities.
 
-MetaMask `eth_sendTransaction` is not offline signing. It opens a wallet confirmation and, if approved, signs **and broadcasts** the transaction; success returns a transaction hash, not signed raw bytes. The production browser adapter and all real calls to this method remain absent/disabled in this sprint. The existing raw-signed-transaction verification path remains separate and unchanged.
+MetaMask `eth_sendTransaction` is not offline signing. It opens a wallet confirmation and, if approved, signs **and broadcasts** the transaction; success returns a transaction hash, not signed raw bytes. The operator library now has the narrow injected-provider boundary: it repeats all chain/account/nonce/gas checks, requires the exact `BROADCAST BASE-84532 ...` confirmation, journals before the provider call, and makes one call only. The production browser adapter remains absent/disabled, so no repository CLI or public route can invoke that boundary. The existing raw-signed-transaction verification path remains separate and unchanged.
 
 Before any separately authorized future wallet prompt, the journal must atomically transition from `REHEARSED` to `SUBMISSION_STARTED` and quarantine the payout packet as `RECOVERY_REQUIRED`. This creates a durable one-attempt boundary before MetaMask can broadcast. A returned hash is attached to that same journal. Explicit error `4001` may close the attempt as rejected; timeouts, lost responses, pending-request errors, browser crashes, restarts, nonce movement, and every other uncertain result remain in recovery. They never create a replacement payment automatically.
 
-On ambiguous MetaMask broadcast, search wallet activity, pending transactions, RPC transaction lookup, receipt, and sender nonce for the exact packet. Because MetaMask does not return raw bytes, do not claim byte-for-byte rebroadcast is available through this path. Recover only a hash whose canonical transaction body matches the packet. Never prompt a second transfer, substitute a sender, or allocate a new nonce while the original is unresolved. A reorg moves the same hash and nonce back to recovery.
+On ambiguous MetaMask broadcast, search wallet activity, pending transactions, RPC transaction lookup, receipt, and sender nonce for the exact packet. Because MetaMask does not return raw bytes, do not claim byte-for-byte rebroadcast is available through this path. The recovery boundary requires the exact `RECOVER BASE-84532 <PACKET_UUID> <TX_HASH> NO-RETRY` confirmation, fetches the hash read-only, and checks chain, sender, nonce, token target, zero value, calldata, gas and fee fields before journaling it. Never prompt a second transfer, substitute a sender, or allocate a new nonce while the original is unresolved. A reorg moves the same hash and nonce back to recovery.
 
 ### 7. Destination verification and receipt
 

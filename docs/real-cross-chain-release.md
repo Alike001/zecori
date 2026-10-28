@@ -42,7 +42,7 @@ The coordinator and public Render process hold no payout private key. The LP wal
 
 The human-reviewed signing packet is immutable: order UUID, payout authorization UUID, chain `84532`, expected LP sender, official token contract `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, ERC-20 `transfer` calldata for the order-bound EIP-55 recipient and exact destination atomic amount, reserved sender nonce, EIP-1559 fee bounds, gas limit, creation/expiry times, and packet digest. The signer must independently reconstruct calldata and reject any mismatch.
 
-The no-funds rehearsal validates the persisted approved packet against the selected MetaMask account and fresh Base observations. `eth_sendTransaction` is a wallet confirmation that signs and broadcasts; it returns a transaction hash and does not return signed raw bytes. The repository deliberately contains no provider call to that method and no real browser adapter. The raw-signed transaction path remains available as a separate future integration.
+The no-funds rehearsal validates the persisted approved packet against the selected MetaMask account and fresh Base observations. `eth_sendTransaction` is a wallet confirmation that signs and broadcasts; it returns a transaction hash and does not return signed raw bytes. The repository contains a narrow injected-provider submission boundary with exact human confirmation, fresh revalidation, pre-broadcast journaling, one provider call and recovery-only ambiguous handling. No production browser adapter, public route or unattended caller exposes it. The raw-signed transaction path remains available as a separate future integration.
 
 Nonce and duplicate rules:
 
@@ -53,7 +53,7 @@ Nonce and duplicate rules:
 5. The coordinator records only the externally returned hash after independent packet/hash comparison. Existing replay references enforce one payout transaction per order and reject a transaction reused by another order.
 6. Completion requires a matching canonical transaction body plus a canonical receipt with at least three confirmations and exactly one official-contract `Transfer` from the bound LP sender to the immutable recipient for the exact amount. Reorged, removed, duplicate, wrong-sender, wrong-chain, wrong-token, changed calldata/value/nonce/fees, underpaid, or overpaid evidence cannot complete the order.
 
-The repository now creates and journals a non-signing packet, performs an operator-only no-funds MetaMask rehearsal, enforces durable one-attempt/recovery states, retains raw-signed verification, and independently verifies the eventual canonical transaction and receipt. Real MetaMask invocation remains deliberately disabled. Payout execution therefore remains **BLOCKED pending separate transaction authorization and a reviewed browser adapter enablement**.
+The repository now creates and journals a non-signing packet, performs an operator-only no-funds MetaMask rehearsal, implements the guarded provider-call and exact-hash recovery boundaries, enforces durable one-attempt/recovery states, retains raw-signed verification, and independently verifies the eventual canonical transaction and receipt. Real MetaMask invocation remains deliberately disabled because no production browser adapter is wired. Payout execution therefore remains **BLOCKED pending separate transaction authorization and a reviewed browser adapter enablement**.
 
 ## Hosted readiness
 
@@ -69,12 +69,12 @@ Payout signing remains in the separately controlled MetaMask Chrome profile. A r
 | --- | --- | --- |
 | Owner-bound passkey request + EIP-712 EOA proof | WORKING | Owner/session/intent/origin/nonce/expiry binding and replay rejection pass PostgreSQL tests. |
 | Exact-diversifier Orchard allocation | LOCALLY TESTED | Durable journal and ambiguous-RPC recovery pass; no receiver was allocated in this review. |
-| Wallet A Ironwood health | LOCALLY TESTED | Fresh read-only RPC reports locked/synchronized and 98,465,000 usable ten-confirmation Ironwood zatoshis (the request stated 9,846,500); no unlock occurred. |
+| Wallet A Ironwood health | BLOCKED / REFERENCE VALID | The filesystem reference validates, but the wallet RPC cookie/process is absent in the 2026-10-28 release pass; current balance, sync, history and lock state are unmeasured. No wallet was started or unlocked. |
 | Wallet A rc2 send procedure | PREPARED / NOT EXECUTED | Operator-only preview, encrypted packet preparation, dual-confirmation submission boundary, non-destructive opid recovery, restart durability, terminal relock and no-repeat failure paths pass with RPC doubles and disposable PostgreSQL. No real unlock, signing or broadcast was performed. |
 | Source canonical verification + relay | LOCALLY TESTED | Required pool, exact amount/output/diversifier, activation height/time, canonical block, confirmations, signed relay, replay, expiry, and unresolved paths pass. |
 | Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–013 bind quotes to owner requests, verified intents, receiver allocations, separate payment/confirmation deadlines, canonical Ironwood evidence, immutable revocation history, and recovery liabilities; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, confirmation delay, reorg, and payment mismatch. Not wired publicly. |
 | Base receipt verification | LOCALLY TESTED | Exact official-token Transfer, sender, recipient, amount, canonical block, confirmation, replay, and receipt authentication pass. |
-| MetaMask payout path | PREPARED / DISABLED | Operator-only packet rehearsal, nonce constraints, durable recovery, restart, and canonical verification are locally tested. No real `eth_sendTransaction` call exists or is enabled. |
+| MetaMask payout path | GUARDED LIBRARY / DISABLED | Packet creation, rehearsal, exact-confirmation provider call, nonce constraints, durable pre-broadcast journal, ambiguous recovery, restart, and canonical verification are locally tested. No production browser adapter or real call is enabled. |
 | First owner-bound request | BLOCKED BY APPROVAL | Prerequisites can be reviewed, but creation is a durable mutation and was not authorized. |
 | First linked settlement/receipt | BLOCKED | No genuine source txid, payout txid, or authenticated linked receipt exists. |
 | Render public application | WORKING | HTTPS/health/smoke pass with financial flags closed; deployed assets reproduce commit `8374687`, not current main. |

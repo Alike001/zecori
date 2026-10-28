@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg';
 import {
   activateOrder, attachDestinationEvidence, attachSourceEvidence, authorizePayout, completeOrder,
   confirmSourceEvidence, createOrder, expireOrder, markUnresolved, queuePayoutApproval,
-  recordPayoutSubmission, type DestinationReceiptLink, type PaymentOrder, type SourceReceiptLink,
+  recordPayoutSubmission, BASE_USDC, type DestinationReceiptLink, type PaymentOrder, type SourceReceiptLink,
 } from '../src/lib/order-coordinator.ts';
 import { canonicalOperatorOrderBinding, createOperatorOrderBinding, validateOperatorOrderBinding, type OperatorOrderBinding } from '../src/lib/operator-order.ts';
 import { createFinalReceipt, toShareableReceipt, type FinalReceipt, type ShareableReceipt } from '../src/lib/receipt.ts';
@@ -374,6 +374,25 @@ export class PostgresSettlementStore {
       || record.source_not_before_height !== order.sourceNotBeforeHeight || !record.encrypted_receiver) throw new Error('PAYMENT_READY order has no exact durable allocated receiver');
     const allocated = this.encryption.decrypt<{ receiver: string; diversifierIndex: string }>(record.encrypted_receiver, `allocation:${record.allocation_id}:receiver`);
     if (allocated.receiver !== order.sourceReceiver || allocated.diversifierIndex !== order.sourceDiversifierIndex) throw new Error('Allocated receiver does not match the immutable source order');
+    return structuredClone(order);
+  }
+
+  async payoutPacketOrder(orderId: string, authorizationId: string, now = Date.now()): Promise<PaymentOrder> {
+    const row = await this.readOrder(orderId); const order = this.privateOrder(row);
+    if (row.status !== 'PAYOUT_AWAITING_APPROVAL' || order.status !== 'PAYOUT_AWAITING_APPROVAL'
+      || order.payoutAuthorization.state !== 'APPROVED' || order.payoutAuthorization.authorizationId !== authorizationId) {
+      throw new Error('Order lacks the exact approved payout authorization');
+    }
+    await this.assertImmutableDestination(row);
+    const authorization = await this.pool.query<{ state: string; consumed_at: Date | null; expires_at: Date }>(`SELECT state,consumed_at,expires_at FROM authorization_records
+      WHERE authorization_id=$1 AND order_id=$2 AND kind='PAYOUT'`, [authorizationId, orderId]);
+    const record = authorization.rows[0];
+    if (!record || record.state !== 'CONSUMED' || !record.consumed_at || record.consumed_at > record.expires_at || record.expires_at.getTime() <= now) {
+      throw new Error('Payout authorization is missing, expired, or not consumed');
+    }
+    if (order.destinationChainId !== 84532 || order.destinationAsset.contract !== BASE_USDC || order.destinationAmountAtomic !== '1000000') {
+      throw new Error('Order is not the exact approved Base Sepolia test-USDC payout');
+    }
     return structuredClone(order);
   }
 

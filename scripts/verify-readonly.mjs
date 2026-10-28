@@ -32,7 +32,19 @@ async function visit(folder) {
           && source.includes('never call z_sendmany again')
           && source.includes("exactJsonDecimal('0.01000000')")
           && !source.includes('walletpassphrase');
-        if (!reviewedPacketOnly && !disabledMetaMaskDescriptor && !guardedWalletASubmission) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
+        const metaMaskJournal = source.indexOf('await input.store.beginSubmission(input.packet.packetId,input.rehearsal.requestDigest,now)');
+        const metaMaskPrompt = source.indexOf("await input.provider.request({method:'eth_sendTransaction'");
+        const guardedMetaMaskSubmission = full === join('server','metamask-payout.ts')
+          && pattern.source.includes('eth_sendTransaction')
+          && source.includes('expectedMetaMaskPayoutConfirmation(input.packet)')
+          && source.includes('broadcastEnabled:true')
+          && source.includes('const fresh=await rehearseMetaMaskPayout(input.packet,input.provider,now)')
+          && metaMaskJournal !== -1 && metaMaskPrompt > metaMaskJournal
+          && source.includes('await input.store.recordTransactionHash(input.packet.packetId,hash,now)')
+          && source.includes('await input.store.recordRejection(input.packet.packetId,4001,now)')
+          && source.includes('await input.store.requireRecovery(input.packet.packetId')
+          && source.includes('automatic retry is forbidden');
+        if (!reviewedPacketOnly && !disabledMetaMaskDescriptor && !guardedWalletASubmission && !guardedMetaMaskSubmission) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
       }
       if (walletMutationCalls.test(source)) {
         const authorizedModule = full === join('server', 'zcash-address-allocator.ts');
@@ -47,4 +59,4 @@ async function visit(folder) {
 }
 await visit('src');
 await visit('server');
-console.log('Safety gate passed: Wallet A broadcast is confined to the durable one-attempt operator workflow; other financial execution APIs remain absent and frontend logging is disabled.');
+console.log('Safety gate passed: Wallet A and injected-provider MetaMask broadcasts are confined to durable one-attempt operator workflows; other financial execution APIs remain absent and frontend logging is disabled.');

@@ -10,7 +10,7 @@ import { PrivateVerificationRelay } from '../server/private-verification-relay.t
 import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
 import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from '../server/wallet-control.ts';
 import { loadOperatorConfig } from '../server/operator-config.ts';
-import { PostgresBasePayoutPacketStore } from '../server/base-payout-signing-packet.ts';
+import { PostgresBasePayoutPacketStore, prepareBasePayoutSigningPacket } from '../server/base-payout-signing-packet.ts';
 import { PostgresMetaMaskPayoutStore, rehearseMetaMaskPayout, type MetaMaskProvider } from '../server/metamask-payout.ts';
 import { checkSourceWalletA, checkSourceWalletAForSubmission, sourceWalletARpc } from '../server/zcash-source-wallet.ts';
 import { PostgresSourcePaymentOperationStore, prepareWalletASigningPacket } from '../server/zcash-signing-packet.ts';
@@ -35,7 +35,7 @@ const pool = command === 'help' ? undefined : createPostgresPool();
 try {
   if (command === 'help') {
     print({
-      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'preview-source-payment', 'prepare-source-payment', 'source-payment-status', 'submit-source-payment', 'recover-source-payment', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'rehearse-metamask-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
+      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'preview-source-payment', 'prepare-source-payment', 'source-payment-status', 'submit-source-payment', 'recover-source-payment', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'prepare-base-payout', 'rehearse-metamask-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
       confirmation: 'Every mutation requires --confirm "EXECUTE COMMAND-NAME" in an interactive terminal.',
       safety: 'Wallet A submit is the only payment-broadcast command. It requires a prepared encrypted packet, an already-unlocked operator wallet, a durable one-attempt transition, generic confirmation, and a second exact broadcast confirmation. It never unlocks or prints wallet secrets. Ambiguous results are recovery-only and cannot be blindly repeated.',
     });
@@ -116,6 +116,14 @@ try {
       case 'queue-payout': await store.queuePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYOUT_AWAITING_APPROVAL', payoutPerformed: false }); break;
       case 'authorize-payout': { const id = await store.issueAuthorization(required(options.order, 'Order ID'), 'PAYOUT', required(operatorId, 'Operator ID'), (domain, value) => controls.signOperatorPayload(domain, value)); print({ authorizationId: id, action: 'PAYOUT', payoutPerformed: false }); break; }
       case 'approve-payout': await store.approvePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.authorization, 'Authorization ID'), (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature)); print({ stage: 'PAYOUT_APPROVED', payoutPerformed: false }); break;
+      case 'prepare-base-payout': {
+        const orderId=required(options.order,'Order ID'),authorizationId=required(options.authorization,'Authorization ID');
+        const order=await store.payoutPacketOrder(orderId,authorizationId);const operatorConfig=await loadOperatorConfig();
+        const nonce=Number(required(options.nonce,'Reserved pending nonce'));if(!Number.isSafeInteger(nonce)||nonce<0)throw new Error('Reserved pending nonce must be a safe unsigned integer');
+        const packet=prepareBasePayoutSigningPacket({order,operatorConfig,authorizationId,nonce,gasLimit:required(options.gas,'Gas limit'),maxFeePerGas:required(options['max-fee'],'Max fee per gas'),maxPriorityFeePerGas:required(options['priority-fee'],'Max priority fee per gas')});
+        await new PostgresBasePayoutPacketStore(pool!).prepare(packet);
+        print({stage:'BASE_PAYOUT_PACKET_PREPARED',packetId:packet.packetId,packetDigest:packet.packetDigest,chainId:packet.chainId,sender:packet.sender,tokenContract:packet.tokenContract,recipient:packet.recipient,amountAtomic:packet.amountAtomic,nonce:packet.nonce,gasLimit:packet.gasLimit,maxFeePerGas:packet.maxFeePerGas,maxPriorityFeePerGas:packet.maxPriorityFeePerGas,calldata:packet.calldata,expiresAt:packet.expiresAt,broadcastPerformed:false});break;
+      }
       case 'rehearse-metamask-payout': {
         const packetStore=new PostgresBasePayoutPacketStore(pool!);const packet=await packetStore.load(required(options.packet,'Payout packet ID'));
         const observed:Record<string,unknown>={eth_chainId:required(options['chain-id'],'Observed chain ID'),eth_accounts:[required(options.account,'Observed MetaMask account')],eth_getBlockByNumber:{baseFeePerGas:required(options['base-fee'],'Observed base fee')},eth_estimateGas:required(options['gas-estimate'],'Observed gas estimate')};

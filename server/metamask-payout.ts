@@ -9,14 +9,19 @@ export type MetaMaskRequest={method:string;params?:readonly unknown[]};
 export type MetaMaskProvider={request(input:MetaMaskRequest):Promise<unknown>};
 export type MetaMaskTransaction={from:Hex;to:Hex;value:'0x0';data:Hex;nonce:Hex;gas:Hex;maxFeePerGas:Hex;maxPriorityFeePerGas:Hex};
 export type MetaMaskPayoutRehearsal=Readonly<{version:1;packetId:string;packetDigest:string;checkedAt:string;transaction:MetaMaskTransaction;requestDigest:string;observed:{chainId:84532;account:Hex;latestNonce:number;pendingNonce:number;baseFeePerGas:string;gasEstimate:string}}>;
+export type MetaMaskPayoutSubmissionStore=Pick<PostgresMetaMaskPayoutStore,'beginSubmission'|'recordTransactionHash'|'recordRejection'|'requireRecovery'>;
 
 function quantity(value:unknown,label:string):bigint{if(typeof value!=='string'||!/^0x[0-9a-f]+$/i.test(value))throw new Error(`${label} is not a valid RPC quantity`);return BigInt(value);}
 function hex(value:bigint|number):Hex{return `0x${BigInt(value).toString(16)}` as Hex;}
 function transaction(packet:BasePayoutSigningPacket):MetaMaskTransaction{return {from:packet.sender,to:packet.tokenContract as Hex,value:'0x0',data:packet.calldata,nonce:hex(packet.nonce),gas:hex(BigInt(packet.gasLimit)),maxFeePerGas:hex(BigInt(packet.maxFeePerGas)),maxPriorityFeePerGas:hex(BigInt(packet.maxPriorityFeePerGas))};}
 function digest(value:unknown):string{return createHash('sha256').update(JSON.stringify(value)).digest('hex');}
+function transactionHash(value:unknown):Hex{if(typeof value!=='string'||!/^0x[0-9a-f]{64}$/i.test(value))throw new Error('MetaMask did not return a transaction hash');return value as Hex;}
+function errorCode(error:unknown):number|undefined{if(typeof error!=='object'||error===null)return undefined;const value='code' in error?(error as {code?:unknown}).code:'rpcCode' in error?(error as {rpcCode?:unknown}).rpcCode:undefined;return typeof value==='number'?value:undefined;}
 
 export function createMetaMaskPayoutRequest(rehearsal:MetaMaskPayoutRehearsal):Readonly<{method:'eth_sendTransaction';params:readonly [MetaMaskTransaction];broadcasts:true;returns:'transaction-hash'}>{return {method:'eth_sendTransaction',params:[rehearsal.transaction],broadcasts:true,returns:'transaction-hash'};}
-export function classifyMetaMaskSubmissionError(error:unknown):'REJECTED'|'RECOVERY_REQUIRED'{return typeof error==='object'&&error!==null&&'code' in error&&(error as {code?:unknown}).code===4001?'REJECTED':'RECOVERY_REQUIRED';}
+export function classifyMetaMaskSubmissionError(error:unknown):'REJECTED'|'RECOVERY_REQUIRED'{return errorCode(error)===4001?'REJECTED':'RECOVERY_REQUIRED';}
+export function expectedMetaMaskPayoutConfirmation(packet:BasePayoutSigningPacket):string{return `BROADCAST BASE-84532 ${packet.packetId} ${packet.amountAtomic} ${packet.tokenContract} TO ${packet.recipient} FROM ${packet.sender} NONCE ${packet.nonce}`;}
+export function expectedMetaMaskRecoveryConfirmation(packet:BasePayoutSigningPacket,hash:Hex):string{return `RECOVER BASE-84532 ${packet.packetId} ${hash.toLowerCase()} NO-RETRY`;}
 
 export async function rehearseMetaMaskPayout(packet:BasePayoutSigningPacket,provider:MetaMaskProvider,now=Date.now()):Promise<MetaMaskPayoutRehearsal>{
   assertBasePayoutPacket(packet,now);
@@ -36,6 +41,38 @@ export async function rehearseMetaMaskPayout(packet:BasePayoutSigningPacket,prov
 }
 
 export async function reconcileMetaMaskNonce(packet:BasePayoutSigningPacket,provider:MetaMaskProvider):Promise<'UNOBSERVED'|'PENDING_OR_CONSUMED'|'CONSUMED'>{const [latestValue,pendingValue]=await Promise.all([provider.request({method:'eth_getTransactionCount',params:[packet.sender,'latest']}),provider.request({method:'eth_getTransactionCount',params:[packet.sender,'pending']})]);const latest=quantity(latestValue,'latest nonce'),pending=quantity(pendingValue,'pending nonce');if(latest>pending)throw new Error('LP sender RPC nonce observations are inconsistent');if(latest>BigInt(packet.nonce))return 'CONSUMED';if(pending>BigInt(packet.nonce))return 'PENDING_OR_CONSUMED';return 'UNOBSERVED';}
+
+export async function submitMetaMaskPayout(input:{packet:BasePayoutSigningPacket;rehearsal:MetaMaskPayoutRehearsal;provider:MetaMaskProvider;store:MetaMaskPayoutSubmissionStore;confirmation:string;broadcastEnabled:true;now?:number}):Promise<Hex>{
+  const now=input.now??Date.now();assertBasePayoutPacket(input.packet,now);
+  if(input.broadcastEnabled!==true)throw new Error('Real MetaMask broadcast is not explicitly enabled for this operator action');
+  if(input.confirmation!==expectedMetaMaskPayoutConfirmation(input.packet))throw new Error('Exact Base payout broadcast confirmation does not match the immutable packet');
+  if(input.rehearsal.packetId!==input.packet.packetId||input.rehearsal.packetDigest!==input.packet.packetDigest||digest(input.rehearsal.transaction)!==input.rehearsal.requestDigest)throw new Error('Stored MetaMask rehearsal does not match the immutable payout packet');
+  const fresh=await rehearseMetaMaskPayout(input.packet,input.provider,now);
+  if(fresh.requestDigest!==input.rehearsal.requestDigest)throw new Error('Fresh MetaMask request differs from the durably rehearsed request');
+  await input.store.beginSubmission(input.packet.packetId,input.rehearsal.requestDigest,now);
+  try{
+    const result=await input.provider.request({method:'eth_sendTransaction',params:[fresh.transaction]});
+    const hash=transactionHash(result);await input.store.recordTransactionHash(input.packet.packetId,hash,now);return hash;
+  }catch(error){
+    if(classifyMetaMaskSubmissionError(error)==='REJECTED'){await input.store.recordRejection(input.packet.packetId,4001,now);throw new Error('MetaMask payout was explicitly rejected by the operator');}
+    await input.store.requireRecovery(input.packet.packetId,`ambiguous-metamask-submission${errorCode(error)===undefined?'':`-code-${errorCode(error)}`}`,now).catch(()=>undefined);
+    throw new Error('MetaMask payout result is ambiguous; preserve the journal and recover the exact transaction without another prompt');
+  }
+}
+
+export async function recoverMetaMaskPayoutHash(input:{packet:BasePayoutSigningPacket;provider:MetaMaskProvider;store:Pick<PostgresMetaMaskPayoutStore,'recordTransactionHash'>;transactionHash:Hex;confirmation:string;now?:number}):Promise<Hex>{
+  const now=input.now??Date.now(),hash=transactionHash(input.transactionHash);assertBasePayoutPacket(input.packet,now);
+  if(input.confirmation!==expectedMetaMaskRecoveryConfirmation(input.packet,hash))throw new Error('Exact Base payout recovery confirmation is required');
+  const value=await input.provider.request({method:'eth_getTransactionByHash',params:[hash]});
+  if(typeof value!=='object'||value===null)throw new Error('Recovered Base transaction is not observable; automatic retry is forbidden');
+  const tx=value as Record<string,unknown>;const actualHash=transactionHash(tx.hash);
+  const actualData=typeof tx.input==='string'?tx.input:tx.data;
+  if(actualHash.toLowerCase()!==hash.toLowerCase()||typeof tx.from!=='string'||getAddress(tx.from)!==input.packet.sender||typeof tx.to!=='string'||getAddress(tx.to)!==input.packet.tokenContract
+    ||quantity(tx.chainId,'recovered chain ID')!==84532n||quantity(tx.nonce,'recovered nonce')!==BigInt(input.packet.nonce)||quantity(tx.value,'recovered value')!==0n
+    ||typeof actualData!=='string'||actualData.toLowerCase()!==input.packet.calldata.toLowerCase()||quantity(tx.gas,'recovered gas')!==BigInt(input.packet.gasLimit)
+    ||quantity(tx.maxFeePerGas,'recovered max fee')!==BigInt(input.packet.maxFeePerGas)||quantity(tx.maxPriorityFeePerGas,'recovered priority fee')!==BigInt(input.packet.maxPriorityFeePerGas))throw new Error('Recovered Base transaction does not match the immutable payout packet');
+  await input.store.recordTransactionHash(input.packet.packetId,hash,now);return hash;
+}
 
 export class PostgresMetaMaskPayoutStore{
   private readonly pool:Pool;

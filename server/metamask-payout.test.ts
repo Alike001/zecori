@@ -3,7 +3,7 @@ import test from 'node:test';
 import { getAddress } from 'viem';
 import { activateOrder, attachSourceEvidence, authorizePayout, createOrder, queuePayoutApproval } from '../src/lib/order-coordinator.ts';
 import { prepareBasePayoutSigningPacket } from './base-payout-signing-packet.ts';
-import { classifyMetaMaskSubmissionError, createMetaMaskPayoutRequest, REAL_METAMASK_BROADCAST_ENABLED, reconcileMetaMaskNonce, rehearseMetaMaskPayout, type MetaMaskProvider } from './metamask-payout.ts';
+import { classifyMetaMaskSubmissionError, createMetaMaskPayoutRequest, expectedMetaMaskPayoutConfirmation, expectedMetaMaskRecoveryConfirmation, REAL_METAMASK_BROADCAST_ENABLED, reconcileMetaMaskNonce, recoverMetaMaskPayoutHash, rehearseMetaMaskPayout, submitMetaMaskPayout, type MetaMaskPayoutSubmissionStore, type MetaMaskProvider } from './metamask-payout.ts';
 import type { OperatorConfig } from './operator-config.ts';
 
 const now=Date.parse('2026-10-28T12:00:00.000Z');
@@ -20,3 +20,38 @@ test('TEST-ONLY rehearsal rejects wrong network, sender, nonce, unsafe fees, cha
 
 test('TEST-ONLY ambiguous nonce reconciliation never authorizes an automatic retry',async()=>{const approved=packet();assert.equal(await reconcileMetaMaskNonce(approved,provider()),'UNOBSERVED');const pending:MetaMaskProvider={async request(input){if(input.method==='eth_getTransactionCount')return input.params?.[1]==='latest'?'0x7':'0x8';return provider().request(input);}};assert.equal(await reconcileMetaMaskNonce(approved,pending),'PENDING_OR_CONSUMED');const consumed:MetaMaskProvider={async request(input){if(input.method==='eth_getTransactionCount')return '0x8';return provider().request(input);}};assert.equal(await reconcileMetaMaskNonce(approved,consumed),'CONSUMED');});
 test('TEST-ONLY only explicit MetaMask rejection is terminal; every ambiguous error requires recovery',()=>{assert.equal(classifyMetaMaskSubmissionError({code:4001}),'REJECTED');assert.equal(classifyMetaMaskSubmissionError({code:-32002}),'RECOVERY_REQUIRED');assert.equal(classifyMetaMaskSubmissionError(new Error('lost response')),'RECOVERY_REQUIRED');});
+
+function submissionStore(events:string[]):MetaMaskPayoutSubmissionStore{return {
+  async beginSubmission(){events.push('journal-started');},async recordTransactionHash(){events.push('hash-recorded');},
+  async recordRejection(){events.push('rejected');},async requireRecovery(){events.push('recovery-required');},
+};}
+
+test('TEST-ONLY operator submission journals before the one wallet prompt and records only its hash',async()=>{
+  const approved=packet(),rehearsal=await rehearseMetaMaskPayout(approved,provider(),now+5),events:string[]=[];const hash=`0x${'34'.repeat(32)}` as const;
+  const wallet:MetaMaskProvider={async request(input){if(input.method==='eth_sendTransaction'){assert.deepEqual(events,['journal-started']);events.push('wallet-prompt');return hash;}return provider().request(input);}};
+  assert.equal(await submitMetaMaskPayout({packet:approved,rehearsal,provider:wallet,store:submissionStore(events),confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:now+6}),hash);
+  assert.deepEqual(events,['journal-started','wallet-prompt','hash-recorded']);
+});
+
+test('TEST-ONLY rejection, ambiguity, crash state, deadline, confirmation, and repeat gates fail closed',async()=>{
+  const approved=packet(),rehearsal=await rehearseMetaMaskPayout(approved,provider(),now+5);
+  await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:provider(),store:submissionStore([]),confirmation:'wrong',broadcastEnabled:true,now:now+6}),/confirmation/);
+  await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:provider({eth_sendTransaction:`0x${'45'.repeat(32)}`}),store:submissionStore([]),confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:Date.parse(approved.expiresAt)}),/expired/);
+  const rejected:string[]=[];await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:provider({eth_sendTransaction:undefined}),store:submissionStore(rejected),confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:now+6}),/ambiguous/);assert.deepEqual(rejected,['journal-started','recovery-required']);
+  const refusal:string[]=[];const rejecting:MetaMaskProvider={async request(input){if(input.method==='eth_sendTransaction')throw {code:4001};return provider().request(input);}};
+  await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:rejecting,store:submissionStore(refusal),confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:now+6}),/rejected/);assert.deepEqual(refusal,['journal-started','rejected']);
+  const crash:string[]=[];let started=false;const once={...submissionStore(crash),async beginSubmission(){if(started)throw new Error('already started');started=true;crash.push('journal-started');}};
+  const lost:MetaMaskProvider={async request(input){if(input.method==='eth_sendTransaction')throw new Error('browser crashed after prompt');return provider().request(input);}};
+  await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:lost,store:once,confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:now+6}),/ambiguous/);
+  await assert.rejects(submitMetaMaskPayout({packet:approved,rehearsal,provider:lost,store:once,confirmation:expectedMetaMaskPayoutConfirmation(approved),broadcastEnabled:true,now:now+7}),/already started/);
+});
+
+test('TEST-ONLY recovery records an explicitly confirmed exact observed transaction without prompting or retrying',async()=>{
+  const approved=packet(),hash=`0x${'56'.repeat(32)}` as const,events:string[]=[];
+  const observed={hash,from:approved.sender,to:approved.tokenContract,chainId:'0x14a34',nonce:'0x7',value:'0x0',input:approved.calldata,gas:'0xfde8',maxFeePerGas:'0x77359400',maxPriorityFeePerGas:'0x3b9aca00'};
+  const recoveryProvider:MetaMaskProvider={async request(input){assert.equal(input.method,'eth_getTransactionByHash');events.push('lookup');return observed;}};
+  const store={async recordTransactionHash(){events.push('hash-recorded');}};
+  assert.equal(await recoverMetaMaskPayoutHash({packet:approved,provider:recoveryProvider,store,transactionHash:hash,confirmation:expectedMetaMaskRecoveryConfirmation(approved,hash),now:now+6}),hash);
+  assert.deepEqual(events,['lookup','hash-recorded']);
+  await assert.rejects(recoverMetaMaskPayoutHash({packet:approved,provider:{async request(){return {...observed,to:recipient};}},store,transactionHash:hash,confirmation:expectedMetaMaskRecoveryConfirmation(approved,hash),now:now+6}),/does not match/);
+});
