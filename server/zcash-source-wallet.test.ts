@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { checkSourceWalletA, exactZecToZatoshis } from './zcash-source-wallet.ts';
+import { checkSourceWalletA, checkSourceWalletAForSubmission, exactZecToZatoshis } from './zcash-source-wallet.ts';
 import type { RpcCall } from './rpc-client.ts';
 
 type Fixture = { responses: Record<string, unknown> };
@@ -64,6 +64,14 @@ test('requires testnet sync, configured wallet identity, ownership, complete his
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: false, scanning: false, enhanced_through: 500, unlocked_until: 0 } }).call), /owned spending wallet/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: { progress: 0.9 }, enhanced_through: 499, unlocked_until: 0 } }).call), /incomplete/);
   await assert.rejects(checkSourceWalletA(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: 1 } }).call), /locked/);
+});
+
+test('submission readiness requires a separately unlocked wallet while preserving every funding check', async () => {
+  const unlockedUntil = Math.floor(Date.now() / 1_000) + 60;
+  const result = await checkSourceWalletAForSubmission(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: unlockedUntil } }).call);
+  assert.equal(result.locked, false); assert.equal(result.unlockedUntil, unlockedUntil); assert.equal(result.ironwoodUsableZatoshis, '1010000');
+  await assert.rejects(checkSourceWalletAForSubmission(walletRpc().call), /explicitly unlocked/);
+  await assert.rejects(checkSourceWalletAForSubmission(walletRpc({ getwalletinfo: { walletname: 'default', private_keys_enabled: true, scanning: false, enhanced_through: 500, unlocked_until: Math.floor(Date.now() / 1_000) - 1 } }).call), /explicitly unlocked/);
 });
 
 test('fails closed for confirmations, unsafe notes, malformed decimals and inconsistent totals', async () => {

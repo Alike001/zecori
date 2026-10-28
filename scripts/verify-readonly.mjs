@@ -19,13 +19,20 @@ async function visit(folder) {
         const reviewedPacketOnly = full === join('server', 'zcash-signing-packet.ts')
           && pattern.source.includes('z_sendmany')
           && source.includes("'ANY_ORCHARD'") && source.includes("'FullPrivacy'")
-          && source.includes("memo:'OMITTED'") && source.includes('legacyOrchard!==0n')
+          && source.includes("memo: 'OMITTED'") && source.includes('legacyOrchard !== 0n')
           && !/jsonRpcClient|RpcCall|fetch\s*\(|\.send\s*\(/.test(source);
         const disabledMetaMaskDescriptor = full === join('server','metamask-payout.ts')
           && pattern.source.includes('eth_sendTransaction')
           && source.includes('REAL_METAMASK_BROADCAST_ENABLED=false')
           && !/provider\.request\(\{method:\s*['"]eth_sendTransaction/.test(source);
-        if (!reviewedPacketOnly && !disabledMetaMaskDescriptor) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
+        const guardedWalletASubmission = full === join('server','zcash-source-payment.ts')
+          && pattern.source.includes('z_sendmany')
+          && source.includes('beginSubmission(input.operationId, input.packetDigest')
+          && source.includes("markSubmissionAmbiguous(input.operationId, 'zecd-submit-response-ambiguous'")
+          && source.includes('never call z_sendmany again')
+          && source.includes("exactJsonDecimal('0.01000000')")
+          && !source.includes('walletpassphrase');
+        if (!reviewedPacketOnly && !disabledMetaMaskDescriptor && !guardedWalletASubmission) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
       }
       if (walletMutationCalls.test(source)) {
         const authorizedModule = full === join('server', 'zcash-address-allocator.ts');
@@ -40,4 +47,4 @@ async function visit(folder) {
 }
 await visit('src');
 await visit('server');
-console.log('Safety gate passed: no financial execution methods or frontend logging; exact-index address derivation is confined to the guarded allocator module.');
+console.log('Safety gate passed: Wallet A broadcast is confined to the durable one-attempt operator workflow; other financial execution APIs remain absent and frontend logging is disabled.');

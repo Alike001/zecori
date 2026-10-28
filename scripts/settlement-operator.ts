@@ -12,6 +12,9 @@ import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from '..
 import { loadOperatorConfig } from '../server/operator-config.ts';
 import { PostgresBasePayoutPacketStore } from '../server/base-payout-signing-packet.ts';
 import { PostgresMetaMaskPayoutStore, rehearseMetaMaskPayout, type MetaMaskProvider } from '../server/metamask-payout.ts';
+import { checkSourceWalletA, checkSourceWalletAForSubmission, sourceWalletARpc } from '../server/zcash-source-wallet.ts';
+import { PostgresSourcePaymentOperationStore, prepareWalletASigningPacket } from '../server/zcash-signing-packet.ts';
+import { recoverWalletASourcePayment, sourcePaymentOperationSummary, sourcePaymentReview, submitWalletASourcePayment } from '../server/zcash-source-payment.ts';
 
 function parse(values: string[]): { command: string; options: Record<string, string> } {
   if (values[0] === '--') values.shift(); const [command = 'help', ...rest] = values; const options: Record<string, string> = {};
@@ -24,7 +27,7 @@ function print(value: unknown): void { process.stdout.write(`${JSON.stringify(va
 function masked(value: string): string { return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value; }
 
 const { command, options } = parse(process.argv.slice(2));
-const readOnly = ['help', 'status', 'pending-requests', 'orders', 'verify-receipt'].includes(command);
+const readOnly = ['help', 'status', 'pending-requests', 'orders', 'preview-source-payment', 'source-payment-status', 'verify-receipt'].includes(command);
 if (!readOnly) confirm(options.confirm, `EXECUTE ${command.toUpperCase()}`);
 const operatorId = options.operator ?? process.env.ZECATHON_OPERATOR_ID;
 const pool = command === 'help' ? undefined : createPostgresPool();
@@ -32,9 +35,9 @@ const pool = command === 'help' ? undefined : createPostgresPool();
 try {
   if (command === 'help') {
     print({
-      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'rehearse-metamask-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
+      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'preview-source-payment', 'prepare-source-payment', 'source-payment-status', 'submit-source-payment', 'recover-source-payment', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'rehearse-metamask-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
       confirmation: 'Every mutation requires --confirm "EXECUTE COMMAND-NAME" in an interactive terminal.',
-      safety: 'allocate-address is the only wallet-mutating command and requires a scoped authorization plus a durable PostgreSQL journal. MetaMask rehearsal validates and journals an already-approved packet but never opens MetaMask. No command signs or broadcasts a transaction, executes a payout, or moves funds.',
+      safety: 'Wallet A submit is the only payment-broadcast command. It requires a prepared encrypted packet, an already-unlocked operator wallet, a durable one-attempt transition, generic confirmation, and a second exact broadcast confirmation. It never unlocks or prints wallet secrets. Ambiguous results are recovery-only and cannot be blindly repeated.',
     });
   } else {
     const encryption = await loadEncryptionKeyring(); const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL, contractWalletPolicy(process.env.ZECATHON_ERC1271_ENABLED)); const store = new PostgresSettlementStore(pool!, encryption, walletVerifier); const controls = new OperatorControlStore();
@@ -64,6 +67,34 @@ try {
         print({ stage: 'ALLOCATION_CANCELLED_BEFORE_RPC', receiverDerived: false }); break;
       }
       case 'publish-instructions': await store.publishPaymentInstructions(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYMENT_INSTRUCTIONS_PUBLISHED' }); break;
+      case 'preview-source-payment': {
+        const order = await store.sourcePaymentOrder(required(options.order, 'Order ID')); const wallet = await checkSourceWalletA();
+        const packet = prepareWalletASigningPacket(order, wallet); print({ stage: 'WALLET_A_SOURCE_PAYMENT_PREVIEW', ...sourcePaymentReview(packet) }); break;
+      }
+      case 'prepare-source-payment': {
+        const order = await store.sourcePaymentOrder(required(options.order, 'Order ID')); const wallet = await checkSourceWalletA();
+        const packet = prepareWalletASigningPacket(order, wallet); const operationId = await new PostgresSourcePaymentOperationStore(pool!, encryption).prepare(packet);
+        print({ stage: 'WALLET_A_SOURCE_PAYMENT_PREPARED', operationId, ...sourcePaymentReview(packet) }); break;
+      }
+      case 'source-payment-status': {
+        const operation = await new PostgresSourcePaymentOperationStore(pool!, encryption).load(required(options.operation, 'Source payment operation ID'));
+        print({ stage: 'WALLET_A_SOURCE_PAYMENT_STATUS', ...sourcePaymentOperationSummary(operation) }); break;
+      }
+      case 'submit-source-payment': {
+        const operationId = required(options.operation, 'Source payment operation ID'); const packetDigest = required(options['packet-digest'], 'Source packet digest');
+        const expectedBroadcast = `BROADCAST WALLET-A ${operationId} 1000000 ZAT NO-MEMO ZIP317`;
+        if (required(options['broadcast-confirm'], 'Separate Wallet A broadcast confirmation') !== expectedBroadcast) throw new Error(`Separate broadcast confirmation must exactly equal: ${expectedBroadcast}`);
+        const operationStore = new PostgresSourcePaymentOperationStore(pool!, encryption); const operation = await operationStore.load(operationId);
+        if (operation.packet.packetDigest !== packetDigest) throw new Error('Reviewed packet digest does not match the prepared source payment');
+        const rpc = await sourceWalletARpc(); const wallet = await checkSourceWalletAForSubmission(rpc, operation.packet.walletName);
+        const result = await submitWalletASourcePayment({ store: operationStore, operationId, packetDigest, wallet, rpc });
+        print({ stage: 'WALLET_A_SUBMISSION_STARTED', operationId: result.operationId, zecdOperationIdRecorded: true, broadcastAttempted: true, repeatAllowed: false }); break;
+      }
+      case 'recover-source-payment': {
+        const operationStore = new PostgresSourcePaymentOperationStore(pool!, encryption); const rpc = await sourceWalletARpc();
+        const result = await recoverWalletASourcePayment({ store: operationStore, operationId: required(options.operation, 'Source payment operation ID'), rpc, ...(options.opid ? { recoveredOpid: options.opid } : {}), ...(options.tx ? { recoveredTxid: options.tx } : {}) });
+        print({ stage: 'WALLET_A_SOURCE_PAYMENT_RECOVERY', ...result, transactionIdDisplayed: Boolean(result.transactionId), privacy: 'operator-terminal-only; do not publish raw logs', repeatAllowed: false }); break;
+      }
       case 'relay-source-detect':
       case 'relay-source-confirm': {
         requirePrivateRelayTransport();

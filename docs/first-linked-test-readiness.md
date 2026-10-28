@@ -98,7 +98,33 @@ Set private environment variables in an operator-only shell without putting secr
    corepack pnpm operator -- publish-instructions --order '<ORDER_UUID>' --operator '<OPERATOR_ID>' --confirm 'EXECUTE PUBLISH-INSTRUCTIONS'
    ```
 
-6. **Authorize the source payment separately.** The application has no send command. After reviewing the active order, exact receiver, amount `1,000,000` zatoshis, fee and expiry, approve a separate Wallet A signing/broadcast procedure. That procedure does not exist in this repository and is a blocker. Never unlock from the web service or relay.
+6. **Prepare and separately authorize the source payment.** Preview is read-only and requires Wallet A to remain locked. It reconstructs the packet only from the fresh `PAYMENT_READY` order, durable allocation and fresh Ironwood health, and prints fingerprints rather than the private receiver:
+
+   ```bash
+   corepack pnpm operator -- preview-source-payment --order '<ORDER_UUID>'
+   corepack pnpm operator -- prepare-source-payment --order '<ORDER_UUID>' --confirm 'EXECUTE PREPARE-SOURCE-PAYMENT'
+   corepack pnpm operator -- source-payment-status --operation '<SOURCE_OPERATION_UUID>'
+   ```
+
+   Review the returned packet digest, exact `1,000,000` zatoshis, omitted memo, `10,000`-zatoshi ZIP-317 reserve, FullPrivacy policy and immutable payment deadline. The prepare command persists an encrypted packet but does not unlock, sign or broadcast.
+
+   Wallet unlock remains a separate operator-only approval and secret-safe terminal ceremony; the web service, relay and this CLI never accept or print the passphrase. Only while that exact wallet is briefly unlocked, and only after a second broadcast approval, run the single allowed call:
+
+   ```bash
+   corepack pnpm operator -- submit-source-payment \
+     --operation '<SOURCE_OPERATION_UUID>' \
+     --packet-digest '<64_HEX_PACKET_DIGEST>' \
+     --broadcast-confirm 'BROADCAST WALLET-A <SOURCE_OPERATION_UUID> 1000000 ZAT NO-MEMO ZIP317' \
+     --confirm 'EXECUTE SUBMIT-SOURCE-PAYMENT'
+   ```
+
+   The database enters `SUBMISSION_STARTED` before `z_sendmany`. A timeout, lost response or process crash is permanently recovery-only and cannot call `z_sendmany` again. Poll and recover the same operation with:
+
+   ```bash
+   corepack pnpm operator -- recover-source-payment --operation '<SOURCE_OPERATION_UUID>' --confirm 'EXECUTE RECOVER-SOURCE-PAYMENT'
+   ```
+
+   Supply `--opid '<RECOVERED_OPID>'` only after independent inspection if the original response was lost; its reported method and exact parameters must match the encrypted packet. If the operation registry is unavailable and exact wallet/mempool/chain inspection proves the transaction, a separately confirmed recovery may add `--tx '<EXACT_RECOVERED_TXID>'` only after the operation is already `RECOVERY_REQUIRED`; that path records evidence and cannot submit. Terminal recovery records the txid durably and relocks Wallet A. Never unlock from the web service or relay, and never publish raw operator output.
 
 7. **Verify source settlement.** Queue a signed `SOURCE_DETECTION` relay job for the exact txid, let the operator-side worker claim and answer it over the approved mutually authenticated database tunnel, then apply its signed result. Repeat with `SOURCE_CONFIRMATION` at ten confirmations:
 

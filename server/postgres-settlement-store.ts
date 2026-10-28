@@ -96,8 +96,8 @@ export class PostgresSettlementStore {
   }
 
   async health(): Promise<void> {
-    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control', '015_accepted_order_expiry', '016_separate_payment_deadline']]);
-    if (result.rowCount !== 7) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, wallet-control, accepted-expiry, or payment-deadline migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control', '015_accepted_order_expiry', '016_separate_payment_deadline', '017_wallet_a_submission_recovery']]);
+    if (result.rowCount !== 8) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, wallet-control, expiry, or Wallet A recovery migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
@@ -360,6 +360,21 @@ export class PostgresSettlementStore {
       await this.audit(client, orderId, 'OPERATOR', operatorId, 'PAYMENT_INSTRUCTIONS_PUBLISHED', { allocationValidated: true });
       await client.query('COMMIT');
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
+
+  async sourcePaymentOrder(orderId: string, now = Date.now()): Promise<PaymentOrder> {
+    const row = await this.readOrder(orderId); const order = this.privateOrder(row);
+    if (row.status !== 'AWAITING_PAYMENT' || order.status !== 'AWAITING_PAYMENT' || row.expires_at.getTime() <= now || order.expiresAt !== row.expires_at.toISOString()) throw new Error('Order is not in a fresh PAYMENT_READY source-payment window');
+    if (order.sourceNetwork !== 'zcash-testnet' || order.sourcePool !== 'ironwood' || order.sourceAmountZat !== '1000000' || order.sourceMinimumConfirmations !== 10) throw new Error('Order does not match the exact fixed shielded source terms');
+    await this.assertImmutableDestination(row);
+    const binding = await this.pool.query<{ request_status: string; journal_phase: string; allocation_id: string; source_not_before_height: number; encrypted_receiver: Buffer }>(`SELECT r.status AS request_status,j.journal_phase,j.allocation_id,j.source_not_before_height,j.encrypted_receiver
+      FROM public_order_requests r JOIN address_allocation_journal j ON j.order_id=r.request_id WHERE r.request_id=$1`, [orderId]);
+    const record = binding.rows[0];
+    if (!record || record.request_status !== 'PAYMENT_READY' || record.journal_phase !== 'RESERVED' || record.allocation_id !== order.allocationId
+      || record.source_not_before_height !== order.sourceNotBeforeHeight || !record.encrypted_receiver) throw new Error('PAYMENT_READY order has no exact durable allocated receiver');
+    const allocated = this.encryption.decrypt<{ receiver: string; diversifierIndex: string }>(record.encrypted_receiver, `allocation:${record.allocation_id}:receiver`);
+    if (allocated.receiver !== order.sourceReceiver || allocated.diversifierIndex !== order.sourceDiversifierIndex) throw new Error('Allocated receiver does not match the immutable source order');
+    return structuredClone(order);
   }
 
   async observeSource(orderId: string, transactionId: string, verifier: SourceVerifier = verifyZcashTransaction, now = Date.now()): Promise<void> {

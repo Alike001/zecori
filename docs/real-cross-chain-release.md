@@ -34,7 +34,7 @@ Before a separately authorized human sends that request:
 6. Use `z_waitforoperation`/`z_getoperationstatus` read-only. If the submit response or operation result is ambiguous, stop: inspect the operation registry, wallet history, mempool, and chain before any recovery. Never issue a second `z_sendmany` merely because a client timed out.
 7. Record a txid only from a successful operation result, relock immediately, and independently verify exact receiver/output/diversifier, Ironwood pool, activation height/time, canonical block, and 10 confirmations. A txid alone is not settlement evidence.
 
-No automated test in this repository calls `z_sendmany`.
+Automated tests call only an injected in-memory RPC double; they never connect to zecd, unlock, sign or broadcast. The production method string exists only in the operator-side one-attempt workflow after its durable `SUBMISSION_STARTED` transition and two explicit human confirmations.
 
 ## Base Sepolia: operator-assisted MetaMask payout
 
@@ -70,7 +70,7 @@ Payout signing remains in the separately controlled MetaMask Chrome profile. A r
 | Owner-bound passkey request + EIP-712 EOA proof | WORKING | Owner/session/intent/origin/nonce/expiry binding and replay rejection pass PostgreSQL tests. |
 | Exact-diversifier Orchard allocation | LOCALLY TESTED | Durable journal and ambiguous-RPC recovery pass; no receiver was allocated in this review. |
 | Wallet A Ironwood health | LOCALLY TESTED | Fresh read-only RPC reports locked/synchronized and 98,465,000 usable ten-confirmation Ironwood zatoshis (the request stated 9,846,500); no unlock occurred. |
-| Wallet A rc2 send procedure | LOCALLY TESTED (read-only review) | Exact tagged source and binary behavior reviewed; no signing/broadcast was performed. |
+| Wallet A rc2 send procedure | PREPARED / NOT EXECUTED | Operator-only preview, encrypted packet preparation, dual-confirmation submission boundary, non-destructive opid recovery, restart durability, terminal relock and no-repeat failure paths pass with RPC doubles and disposable PostgreSQL. No real unlock, signing or broadcast was performed. |
 | Source canonical verification + relay | LOCALLY TESTED | Required pool, exact amount/output/diversifier, activation height/time, canonical block, confirmations, signed relay, replay, expiry, and unresolved paths pass. |
 | Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–013 bind quotes to owner requests, verified intents, receiver allocations, separate payment/confirmation deadlines, canonical Ironwood evidence, immutable revocation history, and recovery liabilities; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, confirmation delay, reorg, and payment mismatch. Not wired publicly. |
 | Base receipt verification | LOCALLY TESTED | Exact official-token Transfer, sender, recipient, amount, canonical block, confirmation, replay, and receipt authentication pass. |

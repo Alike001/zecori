@@ -44,9 +44,33 @@ Build and persist the reviewed packet from the exact active order and fresh Wall
 
 The destination object has no `memo` member. There is one receiver and one amount; minconf is `10`; fee is `null` for wallet-computed ZIP-317; privacy is `FullPrivacy`; the order must be unexpired. Reject legacy Orchard eligibility, pool crossing, a changed receiver/diversifier, any extra output/key, or insufficient Ironwood fee reserve.
 
+Run the read-only preview, persist the reviewed encrypted packet, and inspect its redacted durable status:
+
+```bash
+corepack pnpm operator -- preview-source-payment --order '<ORDER_UUID>'
+corepack pnpm operator -- prepare-source-payment --order '<ORDER_UUID>' --confirm 'EXECUTE PREPARE-SOURCE-PAYMENT'
+corepack pnpm operator -- source-payment-status --operation '<SOURCE_OPERATION_UUID>'
+```
+
+After the separate secret-safe unlock ceremony and separate human broadcast approval, the only submission command is:
+
+```bash
+corepack pnpm operator -- submit-source-payment \
+  --operation '<SOURCE_OPERATION_UUID>' \
+  --packet-digest '<64_HEX_PACKET_DIGEST>' \
+  --broadcast-confirm 'BROADCAST WALLET-A <SOURCE_OPERATION_UUID> 1000000 ZAT NO-MEMO ZIP317' \
+  --confirm 'EXECUTE SUBMIT-SOURCE-PAYMENT'
+```
+
+Recover or poll without a second send:
+
+```bash
+corepack pnpm operator -- recover-source-payment --operation '<SOURCE_OPERATION_UUID>' --confirm 'EXECUTE RECOVER-SOURCE-PAYMENT'
+```
+
 `zecd 0.9.0-rc2` performs proving/signing and broadcast asynchronously inside the single `z_sendmany` operation; it cannot provide a separately exportable signed transaction. Therefore obtain and journal both the wallet-unlock approval and the broadcast approval **before** making that one call. Unlock only through the approved secret-safe terminal flow and for the shortest interval. Call once, never from a test or automatic retry, and persist the returned opid immediately.
 
-If the client times out or the response is lost, mark the packet `SUBMISSION_AMBIGUOUS`/`RECOVERY_REQUIRED`. Inspect the operation registry, wallet transactions, mempool, and chain by packet/order/receiver/amount before doing anything else. Recover the discovered txid into the same journal. Never call `z_sendmany` again merely because the first response was ambiguous. Relock immediately after the operation completes or fails.
+The journal enters `SUBMISSION_STARTED` before the RPC call. If the client times out, the response is lost, or the process exits, the same packet becomes `SUBMISSION_AMBIGUOUS`/`RECOVERY_REQUIRED`. Inspect the operation registry, wallet transactions, mempool, and chain by packet/order/receiver/amount before doing anything else. `recover-source-payment` uses non-destructive `z_getoperationstatus`; an optional independently recovered opid is accepted only when its method and exact parameters match. If manual inspection proves the exact transaction after the operation registry is unavailable, record it with the same recovery command plus `--tx '<EXACT_RECOVERED_TXID>'`; this is accepted only from `RECOVERY_REQUIRED` and cannot invoke `z_sendmany`. Never call `z_sendmany` again merely because the first response was ambiguous. Terminal recovery relocks Wallet A.
 
 ### 5. Source evidence and 10 confirmations
 
