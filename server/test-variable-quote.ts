@@ -1,4 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { getAddress, isAddress } from 'viem';
+import { BASE_USDC } from '../src/lib/order-coordinator.ts';
+
+export const TEST_QUOTE_CHAIN_ID = 84532 as const;
+export const TEST_QUOTE_TOKEN_CONTRACT = BASE_USDC;
 
 export const TEST_VARIABLE_QUOTES_FLAG = 'ZECATHON_TEST_VARIABLE_QUOTES_ENABLED';
 
@@ -11,6 +16,7 @@ export type ApprovedTestRate = Readonly<{
   sourceAtomicDenominator: string;
   feeBps: number;
   fixedFeeDestinationAtomic: string;
+  minimumDestinationAtomic: string;
   minimumSourceAtomic: string;
   maximumSourceAtomic: string;
   liquidityCapacityDestinationAtomic: string;
@@ -20,6 +26,8 @@ export type TestVariableQuote = Readonly<{
   quoteId: string;
   orderId: string;
   destinationRecipient: string;
+  destinationChainId: typeof TEST_QUOTE_CHAIN_ID;
+  destinationTokenContract: string;
   bindingFingerprint: string;
   providerId: string;
   providerApprovalId: string;
@@ -39,24 +47,43 @@ type ReservedQuote = Omit<TestVariableQuote, 'status'> & {
   status: 'RESERVED' | 'CONSUMED' | 'RELEASED';
 };
 
-function unsignedAtomic(label: string, value: string, allowZero = false): bigint {
+export function unsignedAtomic(label: string, value: string, allowZero = false): bigint {
   if (!/^(0|[1-9]\d*)$/.test(value)) throw new Error(`${label} must be an unsigned base-10 integer`);
   const parsed = BigInt(value);
   if (!allowZero && parsed === 0n) throw new Error(`${label} must be greater than zero`);
   return parsed;
 }
 
-function exactEvmRecipient(value: string): string {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(value)) throw new Error('Destination recipient must be a full EVM address');
-  return value.toLowerCase();
+export function exactEvmRecipient(value: string): string {
+  if (!isAddress(value, { strict: true })) throw new Error('Destination recipient must be a full EIP-55 address');
+  return getAddress(value);
 }
 
 function ceilDivide(numerator: bigint, denominator: bigint): bigint {
   return (numerator + denominator - 1n) / denominator;
 }
 
-function bindingFingerprint(orderId: string, recipient: string, sourceAtomic: string, approvalId: string): string {
-  return createHash('sha256').update(JSON.stringify({ orderId, recipient, sourceAtomic, approvalId })).digest('hex');
+export function bindingFingerprint(orderId: string, recipient: string, sourceAtomic: string, approvalId: string): string {
+  return createHash('sha256').update(JSON.stringify({
+    version: 1, orderId, recipient, sourceAtomic, approvalId,
+    destinationChainId: TEST_QUOTE_CHAIN_ID, destinationTokenContract: TEST_QUOTE_TOKEN_CONTRACT,
+  })).digest('hex');
+}
+
+export function calculateApprovedTestQuote(rate: ApprovedTestRate, sourceAtomic: string): {
+  source: bigint; gross: bigint; fee: bigint; destination: bigint;
+} {
+  const source = unsignedAtomic('Source amount', sourceAtomic);
+  const gross = (source * unsignedAtomic('Rate numerator', rate.destinationAtomicNumerator))
+    / unsignedAtomic('Rate denominator', rate.sourceAtomicDenominator);
+  const fee = ceilDivide(gross * BigInt(rate.feeBps), 10_000n)
+    + unsignedAtomic('Fixed fee', rate.fixedFeeDestinationAtomic, true);
+  if (gross <= fee) throw new Error('Approved test rate produces no destination amount after fees');
+  const destination = gross - fee;
+  if (destination < unsignedAtomic('Minimum destination amount', rate.minimumDestinationAtomic)) {
+    throw new Error('Approved test rate produces less than the minimum destination amount');
+  }
+  return { source, gross, fee, destination };
 }
 
 export class DisabledTestVariableQuoteEngine {
@@ -102,13 +129,7 @@ export class DisabledTestVariableQuoteEngine {
     }
     if (prior) throw new Error('Order quote allocation is terminal and cannot be replaced');
 
-    const rateNumerator = unsignedAtomic('Rate numerator', this.#rate.destinationAtomicNumerator);
-    const rateDenominator = unsignedAtomic('Rate denominator', this.#rate.sourceAtomicDenominator);
-    const gross = (source * rateNumerator) / rateDenominator;
-    const proportionalFee = ceilDivide(gross * BigInt(this.#rate.feeBps), 10_000n);
-    const fee = proportionalFee + unsignedAtomic('Fixed fee', this.#rate.fixedFeeDestinationAtomic, true);
-    if (gross <= fee) throw new Error('Approved test rate produces no destination amount after fees');
-    const destination = gross - fee;
+    const { gross, fee, destination } = calculateApprovedTestQuote(this.#rate, source.toString());
     if (destination > this.#capacity - this.#reserved) throw new Error('Approved test liquidity capacity is unavailable');
 
     const createdAt = new Date(now).toISOString();
@@ -116,6 +137,7 @@ export class DisabledTestVariableQuoteEngine {
     if (Date.parse(expiresAt) <= now) throw new Error('Approved provider rate has expired');
     const quote: ReservedQuote = {
       quoteId: randomUUID(), orderId: input.orderId, destinationRecipient: recipient,
+      destinationChainId: TEST_QUOTE_CHAIN_ID, destinationTokenContract: TEST_QUOTE_TOKEN_CONTRACT,
       bindingFingerprint: bindingFingerprint(input.orderId, recipient, source.toString(), this.#rate.approvalId),
       providerId: this.#rate.providerId, providerApprovalId: this.#rate.approvalId,
       sourceAtomic: source.toString(), grossDestinationAtomic: gross.toString(),
@@ -162,6 +184,7 @@ export class DisabledTestVariableQuoteEngine {
     if (maximum < minimum) throw new Error('Maximum source amount is below the minimum');
     if (!Number.isSafeInteger(rate.feeBps) || rate.feeBps < 0 || rate.feeBps > 10_000) throw new Error('Fee basis points are invalid');
     unsignedAtomic('Fixed fee', rate.fixedFeeDestinationAtomic, true);
+    unsignedAtomic('Minimum destination amount', rate.minimumDestinationAtomic);
     return unsignedAtomic('Liquidity capacity', rate.liquidityCapacityDestinationAtomic);
   }
 

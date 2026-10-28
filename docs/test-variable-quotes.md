@@ -1,11 +1,23 @@
-# Disabled test-only variable quotes
+# Persistent disabled test-only variable quotes
 
 Status: implemented for isolated tests only. The public product, API, fixed route, Render configuration, and settlement workflow do not use this module.
 
-The engine in `server/test-variable-quote.ts` is a future acceptance seam for variable test amounts. It uses decimal strings parsed to `bigint`; floating-point amounts are rejected. A quote requires an explicit provider approval record containing a rational atomic rate, approval window, fees, min/max, and destination-liquidity capacity.
+`server/test-variable-quote.ts` remains the only pricing implementation. It uses decimal strings parsed to `bigint`; floating-point amounts are rejected. `server/postgres-test-variable-quote.ts` adds persistence and calls that same implementation rather than copying the arithmetic. A quote requires an independently authorized provider approval containing a rational atomic rate, approval window, disclosed fees, minimum destination, source range, and destination-liquidity capacity. No market-reference lookup exists.
 
-Rounding is deterministic: gross destination atomic units round down, the basis-point fee rounds up, and the fixed destination-atomic fee is added afterward. A quote reserves the exact post-fee destination amount. The reservation is bound to one UUID order, normalized full recipient, source atomic amount, and provider approval. The same request is idempotent; conflicting terms fail. Expired reservations release capacity; consumed reservations remain allocated and cannot be replaced.
+Rounding is deterministic: gross destination atomic units round down, the basis-point fee rounds up, and the fixed destination-atomic fee is added afterward. Migration 011 stores immutable rate approvals and quote bindings. Each PostgreSQL transaction locks the approval row, releases expired reservations, checks all live liabilities, and inserts at most one quote for an order. This serializes multiple application processes and survives crashes/restarts without over-reserving liquidity.
+
+The reservation binds quote ID, UUID order, exact source zatoshis, exact post-fee USDC atomic units, strict EIP-55 recipient, Base Sepolia chain `84532`, official Circle test-USDC `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, provider/rate approval, fee terms, minimum destination, liquidity, creation time, and expiry. Underpayment, exact payment, and overpayment are distinct outcomes. Only an active exact-bound reservation can be consumed; consumed liquidity stays allocated and duplicate consumption fails.
+
+The first illustrative approval fixture uses one destination atomic unit per source zatoshi, a 25 bps fee rounded up, and a fixed fee of 7 USDC atomic units:
+
+| Source | Source zatoshis | Gross USDC atomic | Fee atomic | Exact destination atomic |
+| --- | ---: | ---: | ---: | ---: |
+| 0.01 TAZ | 1,000,000 | 1,000,000 | 2,507 | 997,493 |
+| 0.02 TAZ | 2,000,000 | 2,000,000 | 5,007 | 1,994,993 |
+| 0.05 TAZ | 5,000,000 | 5,000,000 | 12,507 | 4,987,493 |
 
 The module labels every result as an `operator-approved-test-rate-not-market-price`. It does not fetch a price, assert market value, allocate a wallet address, create an order, publish instructions, sign, broadcast, or pay out.
 
-Acceptance before any wiring requires persistent transactional storage with row locking, provider-signature verification, restart and multi-process concurrency tests, authenticated API and owner binding, UI disclosures, operator liquidity reconciliation, and a separate decision to change route flags. None of those steps is authorized by this document.
+Disposable PostgreSQL tests cover the three amounts, deterministic fee rounding, exact integers, insufficient liquidity, concurrent reservations, restart persistence, expiry recovery, immutable conflicts, under/overpayment, wrong chain, and duplicate consumption. The existing settlement tests separately cover owner binding, wallet-control proof replay, source reorg/canonicality, relay retry/replay, duplicate payout evidence, unresolved/refund states, and authenticated receipts.
+
+Provider-signature verification, authenticated owner-facing quote API integration, signer-side payout execution, and live end-to-end evidence remain blocked. The public UI/API must stay fixed-route and disabled until those gates pass and a separate release explicitly enables them.
