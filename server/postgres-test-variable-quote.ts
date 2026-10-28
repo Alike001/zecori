@@ -8,7 +8,7 @@ import {
 
 export type PersistentQuoteStatus = 'RESERVED'|'CONSUMED'|'RELEASED'|'RECOVERY_REQUIRED'|'REFUND_PENDING'|'REFUNDED';
 export type PersistentTestVariableQuote = Readonly<{
-  quoteId: string; orderId: string; approvalId: string; providerId: string;
+  quoteId: string; orderId: string; ownerUserId: string; destinationIntentId: string; approvalId: string; providerId: string;
   destinationRecipient: string; destinationChainId: 84532; destinationTokenContract: string;
   sourceAtomic: string; grossDestinationAtomic: string; feeDestinationAtomic: string;
   destinationAtomic: string; bindingFingerprint: string; createdAt: string; expiresAt: string;
@@ -21,7 +21,7 @@ type ApprovalRow = {
   liquidity_capacity_destination_atomic: string; status: 'APPROVED'|'REVOKED';
 };
 type QuoteRow = {
-  quote_id: string; order_id: string; approval_id: string; binding_fingerprint: Buffer;
+  quote_id: string; order_id: string; owner_user_id: string; destination_intent_id: string; approval_id: string; binding_fingerprint: Buffer;
   destination_recipient: string; destination_chain_id: 84532; destination_token_contract: string;
   source_atomic: string; gross_destination_atomic: string; fee_destination_atomic: string;
   destination_atomic: string; status: PersistentQuoteStatus; created_at: Date; expires_at: Date;
@@ -68,12 +68,17 @@ export class PostgresTestVariableQuoteStore {
     if (!existing.rows[0]?.terms_fingerprint.equals(fingerprint)) throw new Error('Approval ID is already bound to different immutable terms');
   }
 
-  async quote(input: { approvalId: string; orderId: string; destinationRecipient: string; sourceAtomic: string; now?: number }): Promise<PersistentTestVariableQuote> {
-    requireUuid(input.orderId,'Order ID'); const recipient=exactEvmRecipient(input.destinationRecipient); const now=input.now??Date.now();
+  async quote(input: { approvalId: string; orderId: string; ownerUserId: string; destinationIntentId: string; destinationRecipient: string; sourceAtomic: string; now?: number }): Promise<PersistentTestVariableQuote> {
+    requireUuid(input.orderId,'Order ID'); requireUuid(input.ownerUserId,'Owner user ID'); requireUuid(input.destinationIntentId,'Destination intent ID');
+    const recipient=exactEvmRecipient(input.destinationRecipient); const now=input.now??Date.now();
     if (!Number.isSafeInteger(now)||now<0) throw new Error('Quote time is invalid');
     const client=await this.pool.connect();
     try {
       await client.query('BEGIN'); const approval=await this.lockApproval(client,input.approvalId);
+      const ownerBinding=await client.query<{request_id:string}>(`SELECT r.request_id FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id
+        JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id AND p.verification_status='VERIFIED'
+        WHERE r.request_id=$1 AND r.owner_user_id=$2 AND d.intent_id=$3 AND r.status='AWAITING_OPERATOR' FOR UPDATE OF r,d,p`,[input.orderId,input.ownerUserId,input.destinationIntentId]);
+      if(!ownerBinding.rows[0]) throw new Error('Quote requires a matching owner request and verified destination proof');
       await this.releaseExpiredLocked(client,approval.approval_id,now);
       const rate=approval.immutable_terms; const expectedRateFingerprint=rateFingerprint(rate);
       if (!approval.terms_fingerprint.equals(expectedRateFingerprint) || rate.approvalId!==approval.approval_id || rate.providerId!==approval.provider_id) throw new Error('Persisted rate approval binding is invalid');
@@ -84,7 +89,7 @@ export class PostgresTestVariableQuoteStore {
       const expectedBinding=bindingFingerprint(input.orderId,recipient,source.toString(),approval.approval_id);
       const prior=await client.query<QuoteRow>('SELECT * FROM test_variable_quote_reservations WHERE order_id=$1 FOR UPDATE',[input.orderId]);
       if(prior.rows[0]) {
-        if(prior.rows[0].binding_fingerprint.toString('hex')!==expectedBinding) throw new Error('Order already has a quote with different immutable terms');
+        if(prior.rows[0].binding_fingerprint.toString('hex')!==expectedBinding||prior.rows[0].owner_user_id!==input.ownerUserId||prior.rows[0].destination_intent_id!==input.destinationIntentId) throw new Error('Order already has a quote with different immutable terms');
         if(prior.rows[0].status==='RELEASED'||prior.rows[0].status==='REFUNDED') throw new Error('Order quote allocation is terminal and cannot be replaced');
         await client.query('COMMIT'); return this.publicQuote(prior.rows[0],approval.provider_id);
       }
@@ -95,9 +100,9 @@ export class PostgresTestVariableQuoteStore {
       if(amounts.destination>available) throw new Error('Approved test liquidity capacity is unavailable');
       const created=new Date(now); const expires=new Date(Math.min(now+this.quoteLifetimeMs,approval.expires_at.getTime()));
       const quoteId=randomUUID(); const inserted=await client.query<QuoteRow>(`INSERT INTO test_variable_quote_reservations
-        (quote_id,order_id,approval_id,binding_fingerprint,destination_recipient,destination_chain_id,destination_token_contract,source_atomic,gross_destination_atomic,fee_destination_atomic,destination_atomic,status,created_at,expires_at,updated_at)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'RESERVED',$12,$13,$12) RETURNING *`,
-      [quoteId,input.orderId,approval.approval_id,Buffer.from(expectedBinding,'hex'),recipient,TEST_QUOTE_CHAIN_ID,TEST_QUOTE_TOKEN_CONTRACT,source.toString(),amounts.gross.toString(),amounts.fee.toString(),amounts.destination.toString(),created,expires]);
+        (quote_id,order_id,owner_user_id,destination_intent_id,approval_id,binding_fingerprint,recipient_fingerprint,destination_recipient,destination_chain_id,destination_token_contract,source_atomic,gross_destination_atomic,fee_destination_atomic,destination_atomic,status,created_at,expires_at,updated_at)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'RESERVED',$15,$16,$15) RETURNING *`,
+      [quoteId,input.orderId,input.ownerUserId,input.destinationIntentId,approval.approval_id,Buffer.from(expectedBinding,'hex'),createHash('sha256').update(recipient.toLowerCase()).digest(),recipient,TEST_QUOTE_CHAIN_ID,TEST_QUOTE_TOKEN_CONTRACT,source.toString(),amounts.gross.toString(),amounts.fee.toString(),amounts.destination.toString(),created,expires]);
       await client.query('COMMIT'); return this.publicQuote(inserted.rows[0],approval.provider_id);
     } catch(error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
   }
@@ -128,5 +133,5 @@ export class PostgresTestVariableQuoteStore {
 
   private async lockApproval(client:PoolClient,approvalId:string):Promise<ApprovalRow>{const result=await client.query<ApprovalRow>('SELECT * FROM test_variable_rate_approvals WHERE approval_id=$1 FOR UPDATE',[approvalId]);if(!result.rows[0])throw new Error('Independent provider rate approval not found');return result.rows[0];}
   private async releaseExpiredLocked(client:PoolClient,approvalId:string,now:number):Promise<void>{await client.query(`UPDATE test_variable_quote_reservations SET status='RELEASED',released_at=$2,updated_at=$2 WHERE approval_id=$1 AND status='RESERVED' AND expires_at <= $2`,[approvalId,new Date(now)]);}
-  private publicQuote(row:QuoteRow,providerId:string):PersistentTestVariableQuote{return {quoteId:row.quote_id,orderId:row.order_id,approvalId:row.approval_id,providerId,destinationRecipient:row.destination_recipient,destinationChainId:row.destination_chain_id,destinationTokenContract:row.destination_token_contract,sourceAtomic:row.source_atomic,grossDestinationAtomic:row.gross_destination_atomic,feeDestinationAtomic:row.fee_destination_atomic,destinationAtomic:row.destination_atomic,bindingFingerprint:row.binding_fingerprint.toString('hex'),createdAt:row.created_at.toISOString(),expiresAt:row.expires_at.toISOString(),status:row.status};}
+  private publicQuote(row:QuoteRow,providerId:string):PersistentTestVariableQuote{return {quoteId:row.quote_id,orderId:row.order_id,ownerUserId:row.owner_user_id,destinationIntentId:row.destination_intent_id,approvalId:row.approval_id,providerId,destinationRecipient:row.destination_recipient,destinationChainId:row.destination_chain_id,destinationTokenContract:row.destination_token_contract,sourceAtomic:row.source_atomic,grossDestinationAtomic:row.gross_destination_atomic,feeDestinationAtomic:row.fee_destination_atomic,destinationAtomic:row.destination_atomic,bindingFingerprint:row.binding_fingerprint.toString('hex'),createdAt:row.created_at.toISOString(),expiresAt:row.expires_at.toISOString(),status:row.status};}
 }

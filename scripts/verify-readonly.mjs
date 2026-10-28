@@ -15,7 +15,14 @@ async function visit(folder) {
     if (entry.isDirectory()) await visit(full);
     else if (/\.(ts|tsx)$/.test(entry.name) && !entry.name.endsWith('.test.ts')) {
       const source = await readFile(full, 'utf8');
-      for (const pattern of banned) if (pattern.test(source)) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
+      for (const pattern of banned) if (pattern.test(source)) {
+        const reviewedPacketOnly = full === join('server', 'zcash-signing-packet.ts')
+          && pattern.source.includes('z_sendmany')
+          && source.includes("'ANY_ORCHARD'") && source.includes("'FullPrivacy'")
+          && source.includes("memo:'OMITTED'") && source.includes('legacyOrchard!==0n')
+          && !/jsonRpcClient|RpcCall|fetch\s*\(|\.send\s*\(/.test(source);
+        if (!reviewedPacketOnly) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
+      }
       if (walletMutationCalls.test(source)) {
         const authorizedModule = full === join('server', 'zcash-address-allocator.ts');
         const guarded = source.includes("rpc<DerivedAddress>('z_getaddressforaccount'")

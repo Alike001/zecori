@@ -22,7 +22,7 @@ For the approved 0.01 TAZ settlement, the only reviewed request is the following
 ]
 ```
 
-`ANY_ORCHARD` is rc2's shielded-family selector and includes Ironwood notes after NU6.3. `FullPrivacy` rejects transparent components and cross-pool value movement. The memo member is omitted entirely: an empty string is parsed as no memo, but omission is less ambiguous and prevents an identifying value from entering the request. An explicit fee is not supported; the `null` placeholder selects wallet-computed ZIP-317 fees. The call returns an operation ID and performs proving/broadcast asynchronously.
+`ANY_ORCHARD` is rc2's Orchard-family selector and can select both legacy Orchard and Ironwood notes. It must never be treated as an Ironwood-only selector. The reviewed packet therefore fails unless the fresh ten-confirmation eligible legacy Orchard balance is exactly zero and the exact payment plus fee reserve is available in Ironwood. `FullPrivacy` rejects transparent components and cross-pool value movement. The memo member is omitted entirely: an empty string is parsed as no memo, but omission is less ambiguous and prevents an identifying value from entering the request. An explicit fee is not supported; the `null` placeholder selects wallet-computed ZIP-317 fees. The call returns an operation ID and performs proving/signing/broadcast asynchronously.
 
 Before a separately authorized human sends that request:
 
@@ -30,7 +30,7 @@ Before a separately authorized human sends that request:
 2. Load the authenticated order and compare the exact order UUID, unexpired status, exact dedicated receiver, exact diversifier, source `1,000,000` zatoshis, and receiver activation height. Re-derive/display no replacement receiver.
 3. Construct the request from those bound values. Require exactly one output, `amount: 0.01`, no `memo` key, minconf `10`, fee `null`, and policy `FullPrivacy`. Reject any extra recipient or unknown key.
 4. Under separate approval, unlock Wallet A only for the shortest reviewed interval. Never place the passphrase in arguments, logs, history, source, or the coordinator.
-5. Under a further broadcast approval, call `z_sendmany` once from an operator terminal. Immediately persist the returned operation ID against the order before waiting. Never call this RPC from a test or automatic retry.
+5. rc2 cannot separate signing from broadcast: obtain both explicit approvals before the single call. Under the broadcast approval, call `z_sendmany` once from an operator terminal. Immediately persist the returned operation ID against the order before waiting. Never call this RPC from a test or automatic retry.
 6. Use `z_waitforoperation`/`z_getoperationstatus` read-only. If the submit response or operation result is ambiguous, stop: inspect the operation registry, wallet history, mempool, and chain before any recovery. Never issue a second `z_sendmany` merely because a client timed out.
 7. Record a txid only from a successful operation result, relock immediately, and independently verify exact receiver/output/diversifier, Ironwood pool, activation height/time, canonical block, and 10 confirmations. A txid alone is not settlement evidence.
 
@@ -51,7 +51,7 @@ Nonce and duplicate rules:
 5. The coordinator records only the externally returned hash after independent packet/hash comparison. Existing replay references enforce one payout transaction per order and reject a transaction reused by another order.
 6. Completion requires a canonical receipt with at least three confirmations and exactly one official-contract `Transfer` from the bound LP sender to the immutable recipient for the exact amount. Reorged, removed, duplicate, wrong-sender, wrong-chain, wrong-token, underpaid, or overpaid evidence cannot complete the order.
 
-The repository does not yet implement or operate the independent signer/nonce authority. Payout execution therefore remains **BLOCKED**, even though preparation, verification, replay protection, and recovery rules are reviewed.
+The repository now creates and journals a non-signing packet bound to the confirmed operator configuration and verifies returned signed bytes before recording them. It still does not implement or operate the independent signer/nonce authority. Payout execution therefore remains **BLOCKED**.
 
 ## Hosted readiness
 
@@ -70,7 +70,7 @@ Payout signing is independent of the developer laptop only after the external si
 | Wallet A Ironwood health | LOCALLY TESTED | Fresh read-only RPC reports locked/synchronized and 98,465,000 usable ten-confirmation Ironwood zatoshis (the request stated 9,846,500); no unlock occurred. |
 | Wallet A rc2 send procedure | LOCALLY TESTED (read-only review) | Exact tagged source and binary behavior reviewed; no signing/broadcast was performed. |
 | Source canonical verification + relay | LOCALLY TESTED | Required pool, exact amount/output/diversifier, activation height/time, canonical block, confirmations, signed relay, replay, expiry, and unresolved paths pass. |
-| Persistent multi-amount reservations | LOCALLY TESTED | Migration 011; all 14 disposable PostgreSQL tests pass, including 0.01/0.02/0.05, concurrency, restart, expiry, and payment mismatch. Not wired publicly. |
+| Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–012 bind quotes to owner requests and verified intents; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, and payment mismatch. Not wired publicly. |
 | Base receipt verification | LOCALLY TESTED | Exact official-token Transfer, sender, recipient, amount, canonical block, confirmation, replay, and receipt authentication pass. |
 | External payout signer | BLOCKED | No independent signer/nonce service or recovery rehearsal exists. |
 | First owner-bound request | BLOCKED BY APPROVAL | Prerequisites can be reviewed, but creation is a durable mutation and was not authorized. |
