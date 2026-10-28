@@ -8,7 +8,6 @@ fail() {
 }
 
 [ "${ZECORI_DEPLOYMENT_KIND:-}" = "public-judge-demo" ] || fail "ZECORI_DEPLOYMENT_KIND must identify the isolated public judge demo."
-[ "${ZECORI_JUDGE_MIGRATIONS_ACK:-}" = "MIGRATE_ISOLATED_JUDGE_DATABASE" ] || fail "the isolated judge database migration acknowledgement is missing."
 [ "${NODE_ENV:-}" = "production" ] || fail "NODE_ENV must be production."
 [ "${HOST:-}" = "0.0.0.0" ] || fail "HOST must be 0.0.0.0."
 [ "${TRUST_PROXY:-}" = "1" ] || fail "TRUST_PROXY must be 1."
@@ -25,5 +24,10 @@ case "$DATABASE_URL" in
   *) fail "DATABASE_URL must require TLS." ;;
 esac
 
-node --experimental-strip-types scripts/migrate.ts
+[ "${ZECATHON_TEST_VARIABLE_QUOTES_ENABLED:-0}" = "0" ] || fail "variable financial requests must remain disabled."
+[ -z "${ZECORI_PRIVATE_REQUEST_WINDOW_FILE:-}" ] || fail "private request windows are forbidden on the public service."
+[ -z "${ZECORI_OPERATOR_DATABASE_URL:-}" ] || fail "private operator configuration is forbidden on the public service."
+[ -z "${ZECORI_OPERATOR_LOGIN_TOKEN_FILE:-}" ] || fail "private operator credentials are forbidden on the public service."
+[ -z "${ZECORI_OPERATOR_APPROVED_PACKET:-}" ] || fail "private payout approvals are forbidden on the public service."
+node --experimental-strip-types scripts/verify-public-schema.ts
 exec node --experimental-strip-types server/app-server.ts

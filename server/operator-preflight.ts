@@ -111,7 +111,7 @@ export async function runOperatorPreflight(input: {
   let orderSummary: Awaited<ReturnType<FileOrderStore['operatorSnapshot']>> | undefined;
   try {
     orderSummary = await orders.operatorSnapshot();
-    const conflicting = orderSummary.orders.filter(order => !['COMPLETED', 'FAILED', 'REFUNDED'].includes(order.status));
+    const conflicting = orderSummary.orders.filter(order => !['COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED'].includes(order.status));
     const safelyAllocated = conflicting.length === 1 && conflicting[0].status === 'CREATED';
     if (conflicting.length && !safelyAllocated) blockers.push(`${conflicting.length} pending or unresolved order(s) require reconciliation`);
   } catch (error) { blockers.push(error instanceof Error ? error.message : 'order database inspection failed'); }

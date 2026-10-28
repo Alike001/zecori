@@ -194,7 +194,8 @@ try {
   paymentRecord.status = 'PAYMENT_READY';
   paymentRecord.destinationBinding = { ...paymentRecord.destinationBinding, status:'bound', walletControlVerification:'verified-eoa', verifiedAt:new Date().toISOString() };
   paymentRecord.destinationReview = { recipient:paymentRecord.privateIntent.destination.address, network:'base-sepolia', chainId:84532, asset:'USDC', contract:paymentRecord.terms.destination.contract, amountAtomic:'1000000' };
-  paymentRecord.paymentInstructions = { receiver:paymentReceiver, expiresAt:paymentRecord.expiresAt };
+  paymentRecord.paymentDeadline = new Date(Date.parse(paymentRecord.expiresAt) + 30 * 60_000).toISOString();
+  paymentRecord.paymentInstructions = { receiver:paymentReceiver, expiresAt:paymentRecord.paymentDeadline };
   await send('Page.reload', {}, sessionId);
   await waitFor(`document.querySelector('[data-private-payment-receiver]')?.textContent===${JSON.stringify(paymentReceiver)}`, 'owner-scoped PAYMENT_READY instructions');
   const paymentReady = await evaluate(`({receiver:document.querySelector('[data-private-payment-receiver]')?.textContent,qrTitle:document.querySelector('.receiver-qr title')?.textContent,text:document.body.innerText,copy:Boolean([...document.querySelectorAll('button')].find(node=>node.textContent.includes('Copy full receiver'))),width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth})`);

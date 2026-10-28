@@ -4,6 +4,7 @@ import { BASE_USDC, FIXED_RATE, TRUSTED_PROVIDER_ID } from '../src/lib/order-coo
 import type { DataEncryption } from './data-encryption.ts';
 import type { FinalReceipt, ShareableReceipt } from '../src/lib/receipt.ts';
 import type { WalletReadinessIntent } from './wallet-intent.ts';
+import { assertPrivateRequestAllowed, type PrivateRequestWindow } from './private-request-window.ts';
 import { createDestinationIntentPayload, destinationIntentContext, destinationRecipientFingerprint, digestDestinationIntent, type DestinationIntentPayload } from './destination-intent.ts';
 
 export const PUBLIC_ROUTE_TERMS = Object.freeze({
@@ -21,7 +22,10 @@ export type PublicOrderRequest = {
   id: string;
   status: PublicRequestStatus;
   createdAt: string;
+  /** Operator acceptance / quote deadline. */
   expiresAt: string;
+  /** Immutable shielded payment deadline, present only after acceptance. */
+  paymentDeadline?: string;
   destinationBinding: { status: 'confirmed' | 'bound' | 'expired' | 'revoked' | 'legacy-unverified'; consentConfirmedAt?: string; walletControlVerification: 'unverified' | 'verified-eoa' | 'verified-erc1271'; verifiedAt?: string };
   terms: typeof PUBLIC_ROUTE_TERMS;
   destinationReview?: { recipient: string; network: 'base-sepolia'; chainId: 84532; asset: 'USDC'; contract: typeof BASE_USDC; amountAtomic: '1000000' };
@@ -77,8 +81,11 @@ export class MemoryPublicOrderRequestStore implements PublicOrderRequestStore {
 }
 
 function publicClone(request: PublicOrderRequest & { ownerId?: string; privateIntent?: DestinationIntentPayload }): PublicOrderRequest {
-  const { ownerId: _ownerId, privateIntent: _privateIntent, ...visible } = request;
-  return structuredClone(visible);
+  const { ownerId: _ownerId, privateIntent, ...visible } = request;
+  return structuredClone({
+    ...visible,
+    ...(privateIntent ? { destinationReview: { recipient: privateIntent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
+  });
 }
 
 function ownerHash(ownerId: string): Buffer {
@@ -87,6 +94,7 @@ function ownerHash(ownerId: string): Buffer {
 
 type RequestRow = {
   request_id: string; status: PublicRequestStatus; created_at: Date; expires_at: Date;
+  order_expires_at: Date | null;
   destination_binding_version: number; linked_order_id: string | null;
   encrypted_payment_receiver: Buffer | null; public_view: Record<string, unknown> | null;
   intent_id: string | null; encrypted_intent: Buffer | null; consent_confirmed_at: Date | null; intent_status: 'CONFIRMED' | 'BOUND' | 'EXPIRED' | 'REVOKED' | null;
@@ -102,18 +110,19 @@ function fromRow(row: RequestRow, encryption?: DataEncryption): PublicOrderReque
     : undefined;
   return {
     id: row.request_id, status: row.status, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(),
+    ...(row.order_expires_at ? { paymentDeadline: row.order_expires_at.toISOString() } : {}),
     terms: PUBLIC_ROUTE_TERMS,
-    ...(instructions && intent ? { destinationReview: { recipient: intent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
+    ...(intent ? { destinationReview: { recipient: intent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
     destinationBinding: row.destination_binding_version === 2 && row.intent_status
       ? { status: row.intent_status.toLowerCase() as 'confirmed' | 'bound' | 'expired' | 'revoked', ...(row.consent_confirmed_at ? { consentConfirmedAt: row.consent_confirmed_at.toISOString() } : {}), walletControlVerification: row.proof_status === 'VERIFIED' ? (row.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eoa') : 'unverified', ...(row.proof_status === 'VERIFIED' && row.proof_verified_at ? { verifiedAt: row.proof_verified_at.toISOString() } : {}) }
       : { status: 'legacy-unverified', walletControlVerification: 'unverified' },
     ...(row.linked_order_id ? { linkedOrderId: row.linked_order_id } : {}),
-    ...(instructions ? { paymentInstructions: { receiver: instructions.receiver, expiresAt: row.expires_at.toISOString() } } : {}),
+    ...(instructions && row.order_expires_at ? { paymentInstructions: { receiver: instructions.receiver, expiresAt: row.order_expires_at.toISOString() } } : {}),
     ...(row.public_view ? { order: row.public_view } : {}),
   };
 }
 
-const SELECT_REQUEST = `SELECT r.request_id, r.status, r.created_at, r.expires_at, r.destination_binding_version, r.linked_order_id,
+const SELECT_REQUEST = `SELECT r.request_id, r.status, r.created_at, r.expires_at, o.expires_at AS order_expires_at, r.destination_binding_version, r.linked_order_id,
   r.encrypted_payment_receiver, o.public_view, d.intent_id, d.encrypted_intent, d.consent_confirmed_at, d.status AS intent_status,
   p.method AS proof_method,p.verified_at AS proof_verified_at,p.verification_status AS proof_status
   FROM public_order_requests r LEFT JOIN orders o ON o.order_id = r.linked_order_id LEFT JOIN destination_intents d ON d.request_id = r.request_id
@@ -122,7 +131,8 @@ const SELECT_REQUEST = `SELECT r.request_id, r.status, r.created_at, r.expires_a
 export class PostgresPublicOrderRequestStore implements PublicOrderRequestStore {
   private readonly pool: Pool;
   private readonly encryption?: DataEncryption;
-  constructor(pool: Pool, encryption?: DataEncryption) { this.pool = pool; this.encryption = encryption; }
+  private readonly requestWindow?: PrivateRequestWindow;
+  constructor(pool: Pool, encryption?: DataEncryption, requestWindow?: PrivateRequestWindow) { this.pool = pool; this.encryption = encryption; this.requestWindow = requestWindow; }
   async health(): Promise<void> {
     const result = await this.pool.query('SELECT version FROM schema_migrations WHERE version = ANY($1::text[])', [['007_owner_destination_binding','008_destination_wallet_control']]);
     if (result.rowCount !== 2) throw new Error('Required destination migrations are missing');
@@ -133,6 +143,13 @@ export class PostgresPublicOrderRequestStore implements PublicOrderRequestStore 
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      if (this.requestWindow) {
+        // One global allowance across owners, concurrent HTTP calls and restarts.
+        await client.query("SELECT pg_advisory_xact_lock(hashtextextended('zecori-private-one-request', 0))");
+        assertPrivateRequestAllowed(this.requestWindow, intent);
+        const used = await client.query<{ count: string }>('SELECT count(*) FROM public_order_requests');
+        if (used.rows[0].count !== '0') throw Object.assign(new Error('The private single request has already been created. Retrieve it from Activity; do not create another.'), { statusCode: 409, code: 'PRIVATE_REQUEST_WINDOW_CONSUMED' });
+      }
       await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [ownerId]);
       await client.query(`UPDATE public_order_requests SET status = 'EXPIRED', updated_at = $2
         WHERE owner_session_hash = $1 AND status = 'AWAITING_OPERATOR' AND expires_at <= $2`, [ownerHash(ownerId), new Date(now)]);
@@ -153,7 +170,7 @@ export class PostgresPublicOrderRequestStore implements PublicOrderRequestStore 
       const inserted = await client.query<RequestRow>(`INSERT INTO public_order_requests
         (request_id, owner_session_hash, owner_user_id, destination_binding_version, status, created_at, updated_at, expires_at, legacy_destination_recipient, immutable_terms)
         VALUES ($1, $2, $3, 2, 'AWAITING_OPERATOR', $4, $4, $5, NULL, $6)
-        RETURNING request_id,status,created_at,expires_at,destination_binding_version,linked_order_id,encrypted_payment_receiver,NULL::jsonb AS public_view,
+        RETURNING request_id,status,created_at,expires_at,NULL::timestamptz AS order_expires_at,destination_binding_version,linked_order_id,encrypted_payment_receiver,NULL::jsonb AS public_view,
           NULL::uuid AS intent_id,NULL::bytea AS encrypted_intent,NULL::timestamptz AS consent_confirmed_at,NULL::text AS intent_status,
           NULL::text AS proof_method,NULL::timestamptz AS proof_verified_at,NULL::text AS proof_status`,
         [requestId, ownerHash(ownerId), ownerId, createdAt, expiresAt, PUBLIC_ROUTE_TERMS]);

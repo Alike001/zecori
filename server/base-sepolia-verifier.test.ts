@@ -12,7 +12,7 @@ const addressTopic = `0x${'0'.repeat(24)}${recipient.slice(2)}`;
 const senderTopic = `0x${'0'.repeat(24)}${sender.slice(2)}`;
 const amountData = `0x${(1_000_000n).toString(16).padStart(64, '0')}`;
 
-function rpc(overrides: { receipt?: unknown; block?: unknown; chainId?: string; latest?: string } = {}): RpcCall {
+function rpc(overrides: { receipt?: unknown; transaction?: unknown; block?: unknown; chainId?: string; latest?: string } = {}): RpcCall {
   const receipt = 'receipt' in overrides ? overrides.receipt : {
     status: '0x1', blockHash, blockNumber: '0x64', transactionHash: txid,
     logs: [
@@ -23,6 +23,7 @@ function rpc(overrides: { receipt?: unknown; block?: unknown; chainId?: string; 
   const values: Record<string, unknown> = {
     eth_chainId: overrides.chainId ?? '0x14a34',
     eth_getTransactionReceipt: receipt,
+    eth_getTransactionByHash: 'transaction' in overrides ? overrides.transaction : {hash:txid,from:sender,to:BASE_USDC,input:'0xa9059cbb',value:'0x0',nonce:'0x7',gas:'0xfde8',maxFeePerGas:'0x77359400',maxPriorityFeePerGas:'0x3b9aca00',chainId:'0x14a34',blockHash,blockNumber:'0x64'},
     eth_blockNumber: overrides.latest ?? '0x70',
     eth_getBlockByNumber: 'block' in overrides ? overrides.block : { hash: blockHash, number: '0x64', transactions: [txid] },
   };
@@ -45,7 +46,7 @@ test('rejects missing, failed, non-canonical and mismatched transfer evidence', 
   await assert.rejects(verifyBaseSepoliaTransaction({ ...request, minimumConfirmations: 20 }, { rpc: rpc() }), /Insufficient confirmations/);
   await assert.rejects(verifyBaseSepoliaTransaction({ ...request, recipient: `0x${'f'.repeat(40)}` }, { rpc: rpc() }), /Exactly one/);
   await assert.rejects(verifyBaseSepoliaTransaction({ ...request, amountAtomic: '999999' }, { rpc: rpc() }), /Exactly one/);
-  await assert.rejects(verifyBaseSepoliaTransaction({ ...request, expectedSender: `0x${'8'.repeat(40)}` }, { rpc: rpc() }), /Exactly one/);
+  await assert.rejects(verifyBaseSepoliaTransaction({ ...request, expectedSender: `0x${'8'.repeat(40)}` }, { rpc: rpc() }), /approved payout|Exactly one/);
   const { expectedSender: _expectedSender, ...missingSender } = request;
   await assert.rejects(verifyBaseSepoliaTransaction(missingSender as BaseVerificationRequest, { rpc: rpc() }), /payout sender/);
   const wrongContractReceipt = {
@@ -63,6 +64,8 @@ test('rejects duplicate matching outputs and the historical reference in product
   await assert.rejects(verifyBaseSepoliaTransaction({ orderId: 'order-1', transactionId: txid, recipient, amountAtomic: '1000000', expectedSender: sender }, { rpc: rpc({ receipt: duplicateReceipt }) }), /Exactly one/);
   await assert.rejects(verifyBaseSepoliaTransaction({ orderId: 'order-1', transactionId: BASE_REFERENCE_TRANSACTION, recipient, amountAtomic: '1000000', expectedSender: sender }, { rpc: rpc() }), /Historical reference/);
 });
+
+test('binds the canonical transaction body to the immutable payout packet',async()=>{const request={orderId:'order-1',transactionId:txid,recipient,amountAtomic:'1000000',expectedSender:sender,expectedTransaction:{nonce:7,calldata:'0xa9059cbb',gasLimit:'65000',maxFeePerGas:'2000000000',maxPriorityFeePerGas:'1000000000'}};await verifyBaseSepoliaTransaction(request,{rpc:rpc()});const changed={hash:txid,from:sender,to:BASE_USDC,input:'0xa9059cbb00',value:'0x0',nonce:'0x7',gas:'0xfde8',maxFeePerGas:'0x77359400',maxPriorityFeePerGas:'0x3b9aca00',chainId:'0x14a34',blockHash,blockNumber:'0x64'};await assert.rejects(verifyBaseSepoliaTransaction(request,{rpc:rpc({transaction:changed})}),/immutable payout packet/);});
 
 test('validates a configured HTTPS Base endpoint without silently changing networks', () => {
   assert.equal(baseSepoliaRpcUrl({ BASE_SEPOLIA_RPC_URL: 'https://rpc.example/base-sepolia' }), 'https://rpc.example/base-sepolia');

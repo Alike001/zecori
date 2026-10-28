@@ -33,6 +33,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm docs:validate
       - run: pnpm test
+      - run: pnpm test:release-expiry
       - run: pnpm test:postgres
         env:
           POSTGRES_TEST_URL: postgresql://zecathon_test:ci_only_password@127.0.0.1:5432/zecathon_test
