@@ -8,6 +8,7 @@ import {
   sessionFingerprint, type DestinationControlTypedData, type WalletControlProof,
 } from './wallet-control.ts';
 import type { AuthenticatedUser } from './user-auth.ts';
+import { normalizeEvmAddress } from '../src/lib/evm-address.ts';
 
 export type DestinationChallenge = { challengeId: string; requestId: string; intentId: string; recipient: Address; expiresAt: string; typedData: DestinationControlTypedData };
 export type DestinationVerification = { requestId: string; intentId: string; status: 'verified'; method: 'eip712-eoa' | 'erc1271'; verifiedAt: string };
@@ -81,7 +82,7 @@ export class PostgresDestinationWalletControl implements DestinationWalletContro
     const typedData = this.encryption.decrypt<DestinationControlTypedData>(row.encrypted_challenge, challengeContext(challengeId));
     if (typedData.message.owner !== `0x${hash(session.userId).toString('hex')}` || typedData.message.session !== sessionFingerprint(session.sessionToken) || typedData.message.origin !== origin || typedData.message.intentId !== row.intent_id) throw new Error('Wallet-control challenge binding mismatch');
     const intent = this.encryption.decrypt<DestinationIntentPayload>(row.encrypted_intent, destinationIntentContext(row.intent_id)); assertDestinationPayload(intent);
-    if (typedData.message.recipient.toLowerCase() !== intent.destination.address.toLowerCase() || !row.recipient_fingerprint.equals(destinationRecipientFingerprint(intent.destination.address))) throw new Error('Wallet-control recipient binding mismatch');
+    if (normalizeEvmAddress(typedData.message.recipient) !== normalizeEvmAddress(intent.destination.address) || !row.recipient_fingerprint.equals(destinationRecipientFingerprint(intent.destination.address))) throw new Error('Wallet-control recipient binding mismatch');
     let proof: WalletControlProof;
     try { proof = await this.verifier.verify(typedData, provided, now); }
     catch (error) {

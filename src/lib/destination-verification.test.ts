@@ -14,7 +14,9 @@ const typedData = {
 test('local EIP-712 recovery accepts the exact EOA and rejects a signer mismatch', async () => {
   const signature = await account.signTypedData(typedData);
   await assert.doesNotReject(assertLocalDestinationSigner(typedData, signature, account.address));
+  await assert.doesNotReject(assertLocalDestinationSigner(typedData, signature, account.address.toLowerCase()));
   await assert.rejects(assertLocalDestinationSigner(typedData, signature, `0x${'44'.repeat(20)}`), /does not match/);
+  await assert.rejects(assertLocalDestinationSigner(typedData, signature, 'not-an-address'), /invalid/);
 });
 
 test('local EIP-712 recovery fails safely for malformed signatures', async () => {

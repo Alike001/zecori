@@ -86,7 +86,7 @@ export class BaseSepoliaWalletControlVerifier {
       let recovered: Address;
       try { recovered = await recoverTypedDataAddress({ ...typedData, signature } as Parameters<typeof recoverTypedDataAddress>[0]); }
       catch { throw Object.assign(new Error('Wallet signature is invalid.'), { code: 'INVALID_WALLET_SIGNATURE' }); }
-      if (recovered.toLowerCase() !== recipient.toLowerCase()) throw Object.assign(new Error('Wallet signature does not match the immutable recipient.'), { code: 'WALLET_SIGNER_MISMATCH' });
+      if (normalizeEvmAddress(recovered) !== normalizeEvmAddress(recipient)) throw Object.assign(new Error('Wallet signature does not match the immutable recipient.'), { code: 'WALLET_SIGNER_MISMATCH' });
       method = 'EIP712_EOA';
     } else {
       if (!this.policy.allowContractWallets) throw Object.assign(new Error('Contract-wallet destination verification is disabled for this release.'), { code: 'CONTRACT_WALLET_DISABLED' });
