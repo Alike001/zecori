@@ -1,6 +1,6 @@
 # Verified two-minute Zecathon walkthrough
 
-Use the verified HTTPS demo at [zecori.iamalikex.tech](https://zecori.iamalikex.tech). Do not show fabricated orders, provider responses, transfers, or receipts.
+Use the verified HTTPS demo at [zecori.iamalikex.tech](https://zecori.iamalikex.tech). Do not show fabricated orders, provider responses, transfers, or receipts. Complete the [final recording checklist](final-submission-sprint.md#two-minute-recording-checklist) before uploading.
 
 ## 0:00–0:20 — The privacy boundary
 
@@ -36,6 +36,6 @@ Open Help and use the suggested privacy or refund question.
 
 Open the roadmap/evidence page.
 
-> “The public web app, HTTPS, health checks, ten Neon migrations, guarded smoke, passkey sign-in, and one handle claim are verified. Two-profile live isolation, linked shielded payments, Base payout, external AI, voice, additional networks, and the first funded swap remain off or unverified.”
+> “The public web app, HTTPS, health checks, ten Neon migrations, guarded smoke, passkey sign-in, and one handle claim are verified. Variable amounts, two-profile live isolation, linked shielded payments, Base payout, external AI, voice, additional networks, and the first funded swap remain off or unverified.”
 
 End on “Private origin. Verified arrival.”

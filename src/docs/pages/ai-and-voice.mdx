@@ -31,3 +31,5 @@ Addresses, TAZ, USDC, chain IDs, and transaction hashes are never machine-transl
 Unsupported routes, wrong amounts, invented prices, missing evidence, cross-account reads, prompt injection, malformed provider data, timeouts, rate limits, silence, and unavailable microphones stop without creating or authorizing a financial action.
 
 No live Groq, microphone, recognition, or TTS success is claimed in Milestone 09C: those checks require separate credentials and explicit human opt-in. Automated evidence uses deterministic providers and malformed/timeout/rate-limit fixtures.
+
+The reviewed Groq text model is exactly `openai/gpt-oss-20b`. Credentials must remain in a private server-side mode-0600 key file. Model requests require the exact chargeable-request approval; speech requires its own enablement and approval. Mock transcription and speech pass, including audio-buffer clearing, but no chargeable call or physical recording was made in the final sprint. Provider abuse/reliability logs may apply even though Zecori keeps audio only in memory until the response.

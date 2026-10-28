@@ -1,10 +1,12 @@
 # Free Render + Neon judge deployment
 
-Status: deployed and web-health verified at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech) on 2026-10-27. Ten Neon migrations, HTTPS, liveness, readiness, guarded judge smoke, one real passkey sign-in, and one handle claim are recorded as verified. This runbook does not authorize another repository push, DNS change, database migration, provider activation, wallet access, signing, broadcasting, or settlement.
+Status: deployed and web-health reverified at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech) on 2026-10-28. Ten Neon migrations, HTTPS, liveness, readiness, guarded judge smoke, one real passkey sign-in, and one handle claim are recorded as verified. No Render credential was available during the final audit, so the exact deployed SHA and dashboard-only values remain unverified. This runbook does not authorize another repository push, DNS change, database migration, provider activation, wallet access, signing, broadcasting, or settlement.
 
 ## Compatibility decision
 
 The existing Node process already serves both `dist/` and `/api/v1`, so Zecori fits one Render Node web service without a frontend/backend split. `render.yaml` selects the free Node runtime, pins Node 24.14.1, binds the process to Render's `PORT` on `0.0.0.0`, checks `/health/ready`, and fixes the WebAuthn origin and RP ID to `https://zecori.iamalikex.tech`.
+
+The final DNS audit resolved `zecori.iamalikex.tech` as a CNAME to `zecori-judge.onrender.com`. The `iamalikex.tech` DNS service supplies records only; it does not run Zecori's Node backend. The apex itself had no A record during the check. Do not treat a free registration or DNS control panel as compute hosting.
 
 The service stores all durable application state in an external Neon PostgreSQL database. Render's filesystem is disposable and must contain no database, wallet, key, receipt-evidence, upload, or operator file. The only runtime file is a Render-managed secret file containing the database encryption keyring. Its durable source of truth is the operator's password manager or encrypted vault, not the service filesystem.
 
@@ -85,4 +87,5 @@ Once deployed, no developer laptop process is required for the public applicatio
 - Keep the Neon project and encryption keyring unique to the judge environment. A Neon branch is useful for a restore rehearsal but is not a substitute for an independently recoverable encrypted backup.
 - Render free usage overages suspend service/builds when no payment method exists instead of charging. Monitor the free quotas; do not add a card merely to keep the demo online.
 - If the single Node service exceeds 512 MB in observed use, the fallback is a free Render static site plus this same free API. That split is not presently justified and would require explicit CORS and cookie-domain work; do not introduce it preemptively.
+- A static-edge split would also change WebAuthn origin/RP acceptance, host-only cookie behavior, CSRF/origin checks, CSP `connect-src`, API preflights, cache rules, cold-start visibility, and the security review boundary. It may reduce static asset latency but cannot remove Render/Neon latency from authenticated actions. Keep the same origin through submission.
 - Never enable route requests or liquidity in this Blueprint. Executable settlement needs a separate reviewed release and explicit financial authorization.

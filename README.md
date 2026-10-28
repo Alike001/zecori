@@ -10,7 +10,7 @@ The product is designed to make privacy boundaries, custody, readiness, and sett
 
 ## Current status
 
-This README describes the final privacy-first consumer UX candidate prepared on 2026-10-27.
+This README describes the final privacy-first consumer UX candidate verified on 2026-10-28. The consolidated [final sprint report](docs/final-submission-sprint.md) is the current PASS/BLOCKED ledger.
 
 | Area | Verified state |
 | --- | --- |
@@ -21,6 +21,8 @@ This README describes the final privacy-first consumer UX candidate prepared on 
 | Public data/auth | Ten Neon migrations applied; liveness, readiness, guarded smoke, passkey sign-in, and one handle claim verified |
 | Mainnet or additional chains | **Not supported** |
 | Demo and video | Working demo verified; no final video URL is recorded yet |
+| Variable amounts | Isolated default-off test engine only; not connected to the route, API, UI, or deployment |
+| Final submission | **NO-GO until the video URL and human submission receipt exist** |
 
 The only implemented financial route is:
 
@@ -95,6 +97,8 @@ Local evidence includes unit, API, PostgreSQL integration, virtual WebAuthn/brow
 See [the full wallet compatibility matrix](docs/live-wallet-compatibility.md). The public demo keeps order creation and payment instructions closed, and there is no transparent-funding fallback.
 
 Mainnet, live quotes, automatic settlement, automatic refunds, payment by handle, external notifications, and active multichain support are not implemented product capabilities.
+
+An isolated [test-only variable quote engine](docs/test-variable-quotes.md) now exercises future integer-atomic pricing, fees, bounds, liquidity reservations, expiry, exact binding, rounding, and no-double-allocation behavior. It is disabled by construction and is not imported by the fixed route. It is not a market-price source or a shipped variable-amount feature.
 
 ## Architecture
 
@@ -188,6 +192,8 @@ node scripts/smoke-production.mjs http://127.0.0.1:8787
 
 The judge web application is live at [https://zecori.iamalikex.tech](https://zecori.iamalikex.tech). HTTPS, `/health/live`, `/health/ready`, the ten Neon migrations, and the guarded judge smoke have been verified. The Render startup contract keeps route requests and liquidity disabled.
 
+The final audit also verified that `zecori.iamalikex.tech` is a DNS CNAME to the Render service. Domain registration and DNS hosting provide no backend compute. The public service behavior is verified, but the exact deployed Git SHA and dashboard-only Render/Neon values remain unverified because no Render account/API credential is available locally. Do not split or migrate the origin before submission: the current same-origin design keeps passkeys, host-only cookies, CSRF, CSP, and API calls within one reviewed boundary.
+
 ### Judge deployment: Render + Neon
 
 The [free Render and Neon runbook](docs/free-render-neon-deployment.md) describes the live one-process Node web service backed by TLS-only Neon PostgreSQL. It keeps all financial readiness flags disabled. Do not interpret the verified web deployment as settlement readiness.
@@ -214,6 +220,7 @@ Set `VCS_REF` to the exact reviewed 40-character revision before building. Never
 - [Production verifier](docs/production-verifier.md) and [storage migration](docs/storage-migration.md) — infrastructure and private-data handling.
 - [AI and voice boundaries](docs/ai-and-voice.md) and [AI agent operations](docs/ai-agent-operations.md) — provider gates and no-authority guarantees.
 - [Two-minute walkthrough](docs/zecathon-two-minute-walkthrough.md) and [Zecathon submission packet](docs/zecathon-submission.md) — judge-ready language using verified claims only.
+- [Final functionality and submission sprint](docs/final-submission-sprint.md) — exact release/hosting audit, requirement fit, PASS/BLOCKED matrix, final no-go decision, and recording checklist.
 
 The built application also exposes the local manual at `/docs/getting-started`.
 
