@@ -21,7 +21,11 @@ async function visit(folder) {
           && source.includes("'ANY_ORCHARD'") && source.includes("'FullPrivacy'")
           && source.includes("memo:'OMITTED'") && source.includes('legacyOrchard!==0n')
           && !/jsonRpcClient|RpcCall|fetch\s*\(|\.send\s*\(/.test(source);
-        if (!reviewedPacketOnly) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
+        const disabledMetaMaskDescriptor = full === join('server','metamask-payout.ts')
+          && pattern.source.includes('eth_sendTransaction')
+          && source.includes('REAL_METAMASK_BROADCAST_ENABLED=false')
+          && !/provider\.request\(\{method:\s*['"]eth_sendTransaction/.test(source);
+        if (!reviewedPacketOnly && !disabledMetaMaskDescriptor) throw new Error(`Unsafe execution API appears in ${full}: ${pattern}`);
       }
       if (walletMutationCalls.test(source)) {
         const authorizedModule = full === join('server', 'zcash-address-allocator.ts');

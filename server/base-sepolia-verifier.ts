@@ -11,6 +11,7 @@ export const ERC20_TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f16
 
 type Log = { address?: string; topics?: string[]; data?: string; removed?: boolean; transactionHash?: string; blockHash?: string };
 type TransactionReceipt = { status?: string; blockHash?: string; blockNumber?: string; transactionHash?: string; logs?: Log[] };
+type Transaction = { hash?:string;from?:string;to?:string;input?:string;value?:string;nonce?:string;gas?:string;maxFeePerGas?:string;maxPriorityFeePerGas?:string;chainId?:string;blockHash?:string;blockNumber?:string };
 type Block = { hash?: string; number?: string; transactions?: Array<string | { hash?: string }> };
 
 export function baseSepoliaRpcUrl(env: NodeJS.ProcessEnv = process.env): string {
@@ -57,6 +58,7 @@ export type BaseVerificationRequest = {
   amountAtomic: string;
   expectedSender: string;
   minimumConfirmations?: number;
+  expectedTransaction?: { nonce:number; calldata:string; gasLimit:string; maxFeePerGas:string; maxPriorityFeePerGas:string };
 };
 
 function quantity(value: string | undefined, label: string): bigint {
@@ -90,17 +92,21 @@ export async function verifyBaseSepoliaTransaction(
   const chainId = quantity(await rpc<string>('eth_chainId'), 'chain ID');
   if (chainId !== BigInt(BASE_SEPOLIA_CHAIN_ID)) throw new Error('RPC is not Base Sepolia');
 
-  const receipt = await rpc<TransactionReceipt | null>('eth_getTransactionReceipt', [request.transactionId]);
+  const [receipt,transaction] = await Promise.all([rpc<TransactionReceipt | null>('eth_getTransactionReceipt', [request.transactionId]),rpc<Transaction | null>('eth_getTransactionByHash',[request.transactionId])]);
   if (!receipt) throw new Error('Transaction receipt is missing');
+  if (!transaction) throw new Error('Transaction body is missing');
   if (receipt.status !== '0x1') throw new Error('Transaction did not succeed');
   if (!receipt.blockHash || !receipt.blockNumber) throw new Error('Transaction is not mined');
   if (receipt.transactionHash?.toLowerCase() !== request.transactionId.toLowerCase()) throw new Error('Receipt transaction ID mismatch');
+  if(transaction.hash?.toLowerCase()!==request.transactionId.toLowerCase()||transaction.from?.toLowerCase()!==request.expectedSender.toLowerCase()||transaction.to?.toLowerCase()!==BASE_USDC.toLowerCase()||quantity(transaction.value,'transaction value')!==0n)throw new Error('Transaction body does not match the approved payout sender, token, or zero value');
+  if(request.expectedTransaction){const expected=request.expectedTransaction;if(quantity(transaction.chainId,'transaction chain ID')!==84532n||quantity(transaction.nonce,'transaction nonce')!==BigInt(expected.nonce)||transaction.input?.toLowerCase()!==expected.calldata.toLowerCase()||quantity(transaction.gas,'transaction gas')!==BigInt(expected.gasLimit)||quantity(transaction.maxFeePerGas,'transaction max fee')!==BigInt(expected.maxFeePerGas)||quantity(transaction.maxPriorityFeePerGas,'transaction priority fee')!==BigInt(expected.maxPriorityFeePerGas))throw new Error('Transaction body does not match the immutable payout packet');}
 
   const [latestHex, canonical] = await Promise.all([
     rpc<string>('eth_blockNumber'),
     rpc<Block | null>('eth_getBlockByNumber', [receipt.blockNumber, false]),
   ]);
   if (!canonical || canonical.hash?.toLowerCase() !== receipt.blockHash.toLowerCase()) throw new Error('Receipt block is not canonical');
+  if(transaction.blockHash?.toLowerCase()!==receipt.blockHash.toLowerCase()||transaction.blockNumber?.toLowerCase()!==receipt.blockNumber.toLowerCase())throw new Error('Transaction and receipt block bindings differ');
   const canonicalTransactions = canonical.transactions ?? [];
   if (!canonicalTransactions.some(tx => (typeof tx === 'string' ? tx : tx.hash)?.toLowerCase() === request.transactionId.toLowerCase())) {
     throw new Error('Transaction is absent from its canonical block');

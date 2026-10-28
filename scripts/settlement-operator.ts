@@ -10,6 +10,8 @@ import { PrivateVerificationRelay } from '../server/private-verification-relay.t
 import { loadRelayPrivateKey, loadRelayPublicKey, requirePrivateRelayTransport } from '../server/relay-keys.ts';
 import { contractWalletPolicy, createBaseSepoliaWalletControlVerifier } from '../server/wallet-control.ts';
 import { loadOperatorConfig } from '../server/operator-config.ts';
+import { PostgresBasePayoutPacketStore } from '../server/base-payout-signing-packet.ts';
+import { PostgresMetaMaskPayoutStore, rehearseMetaMaskPayout, type MetaMaskProvider } from '../server/metamask-payout.ts';
 
 function parse(values: string[]): { command: string; options: Record<string, string> } {
   if (values[0] === '--') values.shift(); const [command = 'help', ...rest] = values; const options: Record<string, string> = {};
@@ -30,9 +32,9 @@ const pool = command === 'help' ? undefined : createPostgresPool();
 try {
   if (command === 'help') {
     print({
-      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
+      commands: ['status', 'pending-requests', 'accept-request', 'orders', 'authorize-allocation', 'allocate-address', 'reconcile-allocation', 'cancel-allocation', 'publish-instructions', 'relay-source-detect', 'relay-source-confirm', 'relay-apply', 'observe-source', 'confirm-source', 'queue-payout', 'authorize-payout', 'approve-payout', 'rehearse-metamask-payout', 'record-payout', 'verify-payout', 'verify-receipt', 'expire-order', 'mark-unresolved'],
       confirmation: 'Every mutation requires --confirm "EXECUTE COMMAND-NAME" in an interactive terminal.',
-      safety: 'allocate-address is the only wallet-mutating command and requires a scoped authorization plus a durable PostgreSQL journal. No command unlocks a wallet, signs or broadcasts a transaction, executes a payout, or moves funds.',
+      safety: 'allocate-address is the only wallet-mutating command and requires a scoped authorization plus a durable PostgreSQL journal. MetaMask rehearsal validates and journals an already-approved packet but never opens MetaMask. No command signs or broadcasts a transaction, executes a payout, or moves funds.',
     });
   } else {
     const encryption = await loadEncryptionKeyring(); const walletVerifier = createBaseSepoliaWalletControlVerifier(process.env.BASE_SEPOLIA_RPC_URL, contractWalletPolicy(process.env.ZECATHON_ERC1271_ENABLED)); const store = new PostgresSettlementStore(pool!, encryption, walletVerifier); const controls = new OperatorControlStore();
@@ -83,10 +85,19 @@ try {
       case 'queue-payout': await store.queuePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID')); print({ stage: 'PAYOUT_AWAITING_APPROVAL', payoutPerformed: false }); break;
       case 'authorize-payout': { const id = await store.issueAuthorization(required(options.order, 'Order ID'), 'PAYOUT', required(operatorId, 'Operator ID'), (domain, value) => controls.signOperatorPayload(domain, value)); print({ authorizationId: id, action: 'PAYOUT', payoutPerformed: false }); break; }
       case 'approve-payout': await store.approvePayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.authorization, 'Authorization ID'), (domain, value, signature) => controls.verifyOperatorPayload(domain, value, signature)); print({ stage: 'PAYOUT_APPROVED', payoutPerformed: false }); break;
+      case 'rehearse-metamask-payout': {
+        const packetStore=new PostgresBasePayoutPacketStore(pool!);const packet=await packetStore.load(required(options.packet,'Payout packet ID'));
+        const observed:Record<string,unknown>={eth_chainId:required(options['chain-id'],'Observed chain ID'),eth_accounts:[required(options.account,'Observed MetaMask account')],eth_getBlockByNumber:{baseFeePerGas:required(options['base-fee'],'Observed base fee')},eth_estimateGas:required(options['gas-estimate'],'Observed gas estimate')};
+        const provider:MetaMaskProvider={async request(input){if(input.method==='eth_getTransactionCount')return input.params?.[1]==='latest'?required(options['latest-nonce'],'Observed latest nonce'):required(options['pending-nonce'],'Observed pending nonce');return observed[input.method];}};
+        const rehearsal=await rehearseMetaMaskPayout(packet,provider);await new PostgresMetaMaskPayoutStore(pool!).recordRehearsal(rehearsal);
+        print({stage:'METAMASK_PAYOUT_REHEARSED',packetId:packet.packetId,requestDigest:rehearsal.requestDigest,transaction:rehearsal.transaction,broadcastPerformed:false,semantics:'eth_sendTransaction would prompt, sign, and broadcast; success returns a transaction hash, never signed raw bytes'});break;
+      }
       case 'record-payout': await store.recordPayout(required(options.order, 'Order ID'), required(operatorId, 'Operator ID'), required(options.tx, 'Destination transaction ID')); print({ stage: 'PAYOUT_REFERENCE_RECORDED', payoutPerformed: false }); break;
       case 'verify-payout': {
         const { lpSender } = await loadOperatorConfig();
-        const receiptId = await store.verifyPayout(required(options.order, 'Order ID'), value => controls.signReceipt(value), request => verifyBaseSepoliaTransaction({ ...request, expectedSender: lpSender }));
+        const orderId=required(options.order,'Order ID');const packetStore=new PostgresBasePayoutPacketStore(pool!);const packet=await packetStore.loadByOrder(orderId);const submittedHash=await packetStore.transactionHash(orderId);
+        const receiptId = await store.verifyPayout(orderId, value => controls.signReceipt(value), request => {if(request.transactionId.toLowerCase()!==submittedHash.toLowerCase())throw new Error('Recorded order payout hash does not match the one-time packet submission');return verifyBaseSepoliaTransaction({ ...request, expectedSender: lpSender, expectedTransaction:{nonce:packet.nonce,calldata:packet.calldata,gasLimit:packet.gasLimit,maxFeePerGas:packet.maxFeePerGas,maxPriorityFeePerGas:packet.maxPriorityFeePerGas} });});
+        await packetStore.markConfirmed(packet.packetId,submittedHash);
         print({ stage: 'VERIFIED_RECEIPT_CREATED', receiptId, payoutSenderBound: true }); break;
       }
       case 'verify-receipt': { const result = await store.verifyReceiptAuthenticity(required(options.receipt, 'Receipt ID'), (value, signature) => controls.verifyReceipt(value, signature)); print({ ...result, orderId: masked(result.orderId) }); break; }

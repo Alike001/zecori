@@ -6,7 +6,7 @@ Status: prepared, not authorized. This runbook does not authorize request creati
 
 `owner/passkey request -> verified EIP-712 recipient intent -> operator acceptance -> authorized journaled Wallet B receiver -> published instructions -> reviewed Wallet A packet -> z_sendmany opid/txid recovery -> canonical source detection -> 10 confirmations -> one-time payout approval -> external Base packet/signature/broadcast -> canonical ERC-20 Transfer + 3 confirmations -> signed linked receipt`
 
-The code and synthetic fixtures cover the lifecycle boundaries and failure cases described below. The first real request, receiver, source transaction, external signer rehearsal, payout transaction, and linked receipt do not yet exist. The external Base signer/nonce authority is the shortest hard infrastructure blocker.
+The code and synthetic fixtures cover the lifecycle boundaries and failure cases described below. The first real request, receiver, source transaction, profile-backed MetaMask rehearsal, payout transaction, and linked receipt do not yet exist. The shortest payout blocker is separate authorization plus reviewed enablement of the browser adapter that will invoke the already rehearsed request.
 
 ## Read-only preflight
 
@@ -52,17 +52,21 @@ If the client times out or the response is lost, mark the packet `SUBMISSION_AMB
 
 Queue signed private-relay detection with the real txid. Independently require the exact journaled receiver and diversifier, exact zatoshis, Ironwood output, activation height/time, canonical block hash, and no evidence conflict. At 10 confirmations, rerun canonical verification. A reorg, wrong pool/amount/output, expired evidence, or RPC disagreement moves the order to unresolved; it never authorizes payout.
 
-### 6. Payout authorization and external signing
+### 6. Payout authorization and operator MetaMask rehearsal
 
 Only after canonical source confirmation, separately queue, authorize, and approve the one-time payout. Build the Base packet from the decrypted approved order and the loaded confirmed operator configuration. It binds order/authorization IDs, LP sender plus confirmation timestamp/source, chain `84532`, official token, exact EIP-55 recipient, exact USDC atomic units, ERC-20 `transfer` calldata, value zero, reserved nonce, gas/fee bounds, expiry, serialized unsigned transaction, and digest.
 
-The external signer must independently compare every field, lock `(chain, sender)`, reconcile confirmed/pending nonce, and reserve one unique `(order)` and `(chain, sender, nonce)`. Signing needs a separate human approval; broadcasting needs another. No private key enters the coordinator, Render, Neon, logs, or this repository.
+The operator-only `rehearse-metamask-payout` command consumes an already persisted approved packet and fresh observations copied from the separate MetaMask Chrome profile/provider. It checks chain `84532`, the selected account against the exact LP sender, latest and pending nonce against the reserved nonce, current base fee, gas estimate, fee ceilings, official token, recipient, amount, calldata, and zero transaction value. It journals a single request digest and prints the exact wallet transaction request without opening MetaMask, signing, broadcasting, or moving funds. The observed quantities are JSON-RPC hex quantities.
 
-On ambiguous broadcast, locate the exact signed hash and sender nonce. The same signed bytes may be rebroadcast. Any EIP-1559 replacement keeps sender, nonce, chain, token, recipient, amount, value, and calldata identical; only fee fields may increase under a new reviewed packet. Never substitute a sender or allocate a new nonce while the original is unresolved.
+MetaMask `eth_sendTransaction` is not offline signing. It opens a wallet confirmation and, if approved, signs **and broadcasts** the transaction; success returns a transaction hash, not signed raw bytes. The production browser adapter and all real calls to this method remain absent/disabled in this sprint. The existing raw-signed-transaction verification path remains separate and unchanged.
+
+Before any separately authorized future wallet prompt, the journal must atomically transition from `REHEARSED` to `SUBMISSION_STARTED` and quarantine the payout packet as `RECOVERY_REQUIRED`. This creates a durable one-attempt boundary before MetaMask can broadcast. A returned hash is attached to that same journal. Explicit error `4001` may close the attempt as rejected; timeouts, lost responses, pending-request errors, browser crashes, restarts, nonce movement, and every other uncertain result remain in recovery. They never create a replacement payment automatically.
+
+On ambiguous MetaMask broadcast, search wallet activity, pending transactions, RPC transaction lookup, receipt, and sender nonce for the exact packet. Because MetaMask does not return raw bytes, do not claim byte-for-byte rebroadcast is available through this path. Recover only a hash whose canonical transaction body matches the packet. Never prompt a second transfer, substitute a sender, or allocate a new nonce while the original is unresolved. A reorg moves the same hash and nonce back to recovery.
 
 ### 7. Destination verification and receipt
 
-Record only the externally returned exact hash. After at least three confirmations, independently require a successful canonical Base Sepolia receipt and exactly one official-contract `Transfer` from the configured LP sender to the bound recipient for the exact amount. Reject removed/reorged logs, wrong sender/chain/token/recipient/amount, duplicate hash, nonce conflict, and under/overpayment.
+Record only the returned or recovered exact hash. After at least three confirmations, independently fetch both the transaction and receipt. Require the packet nonce, chain, sender, official token target, zero value, exact calldata, gas and EIP-1559 fee fields, a successful canonical receipt, and exactly one official-contract `Transfer` from the configured LP sender to the bound recipient for the exact amount. Reject removed/reorged logs, wrong sender/chain/token/recipient/amount, duplicate hash, nonce conflict, changed transaction body, and under/overpayment.
 
 Run `verify-payout` only after that check; it creates the signed linked receipt. Run read-only `verify-receipt` and verify its signature, order/source/destination bindings, canonical evidence, and authenticated owner access. Publish txids or a receipt only after these independent checks; never create fixture evidence that resembles a real transaction.
 

@@ -36,22 +36,24 @@ Before a separately authorized human sends that request:
 
 No automated test in this repository calls `z_sendmany`.
 
-## Base Sepolia: external payout signing
+## Base Sepolia: operator-assisted MetaMask payout
 
-The coordinator and public Render process must hold no payout private key. The payout signer must run on separately controlled durable infrastructure, with explicit operator authority and an atomic nonce journal owned by that signer.
+The coordinator and public Render process hold no payout private key. The LP wallet remains in MetaMask in a separate operator Chrome profile. No ordinary application route exposes packet preparation, rehearsal, signing, broadcast, hash recovery, or payout verification.
 
 The human-reviewed signing packet is immutable: order UUID, payout authorization UUID, chain `84532`, expected LP sender, official token contract `0x036CbD53842c5426634e7929541eC2318f3dCF7e`, ERC-20 `transfer` calldata for the order-bound EIP-55 recipient and exact destination atomic amount, reserved sender nonce, EIP-1559 fee bounds, gas limit, creation/expiry times, and packet digest. The signer must independently reconstruct calldata and reject any mismatch.
+
+The no-funds rehearsal validates the persisted approved packet against the selected MetaMask account and fresh Base observations. `eth_sendTransaction` is a wallet confirmation that signs and broadcasts; it returns a transaction hash and does not return signed raw bytes. The repository deliberately contains no provider call to that method and no real browser adapter. The raw-signed transaction path remains available as a separate future integration.
 
 Nonce and duplicate rules:
 
 1. In one signer-side transaction, lock `(chain_id, sender)`, reconcile confirmed and pending nonces, reserve exactly one nonce for the order, and enforce uniqueness on both `(order_id)` and `(chain_id, sender, nonce)`.
-2. Signing changes the journal from `PREPARED` to `SIGNED` and stores the signed-transaction hash. Broadcasting changes it to `SUBMITTED`. Neither transition creates a second ERC-20 transfer.
-3. If submission is ambiguous, query by signed hash and sender nonce. A dropped transaction may be rebroadcast byte-for-byte. A fee replacement must use the same nonce, sender, recipient, token, amount, and calldata; only fee fields may increase. Never create a new nonce while the old nonce is unresolved.
+2. The MetaMask journal stores one rehearsed request digest. Before a future wallet prompt it changes to `SUBMISSION_STARTED` and the packet enters recovery. A successful response stores only the returned transaction hash and changes to `SUBMITTED`.
+3. If the response is lost or ambiguous, restart from the same journal and reconcile wallet activity, transaction lookup, receipt, latest nonce, and pending nonce. Never issue a second transfer automatically. MetaMask does not provide raw bytes for byte-for-byte rebroadcast through this path.
 4. Cancellation is allowed only before signing. After signing, timeout, replacement, reorg, or sender-nonce conflict moves the operation to `RECOVERY_REQUIRED` for human reconciliation.
 5. The coordinator records only the externally returned hash after independent packet/hash comparison. Existing replay references enforce one payout transaction per order and reject a transaction reused by another order.
-6. Completion requires a canonical receipt with at least three confirmations and exactly one official-contract `Transfer` from the bound LP sender to the immutable recipient for the exact amount. Reorged, removed, duplicate, wrong-sender, wrong-chain, wrong-token, underpaid, or overpaid evidence cannot complete the order.
+6. Completion requires a matching canonical transaction body plus a canonical receipt with at least three confirmations and exactly one official-contract `Transfer` from the bound LP sender to the immutable recipient for the exact amount. Reorged, removed, duplicate, wrong-sender, wrong-chain, wrong-token, changed calldata/value/nonce/fees, underpaid, or overpaid evidence cannot complete the order.
 
-The repository now creates and journals a non-signing packet bound to the confirmed operator configuration and verifies returned signed bytes before recording them. It still does not implement or operate the independent signer/nonce authority. Payout execution therefore remains **BLOCKED**.
+The repository now creates and journals a non-signing packet, performs an operator-only no-funds MetaMask rehearsal, enforces durable one-attempt/recovery states, retains raw-signed verification, and independently verifies the eventual canonical transaction and receipt. Real MetaMask invocation remains deliberately disabled. Payout execution therefore remains **BLOCKED pending separate transaction authorization and a reviewed browser adapter enablement**.
 
 ## Hosted readiness
 
@@ -59,7 +61,7 @@ The public origin is healthy and fail-closed. Its downloaded JavaScript and CSS 
 
 A no-card third-party VM with durable private disk is not presently verified. Render free web services have ephemeral files, no persistent disks/private services/background workers, and may sleep/restart. Oracle's free-account signup requires a payment-verification card, and Fly.io requires a card for ordinary organizations. The practical no-card option is operator-owned hardware other than the developer laptop, with encrypted durable storage and outbound-only authenticated relay (Tailscale Serve can provide private operator access; Funnel is unnecessary). Until such hardware is supplied and survives backup/restore/restart acceptance, do not export a UFVK. Official references: [Render free limits](https://render.com/docs/free), [Render disks](https://render.com/docs/disks), [Oracle signup](https://docs.oracle.com/en-us/iaas/Content/GSG/Tasks/signingup_topic-Sign_Up_for_Free_Oracle_Cloud_Promotion.htm), [Fly.io pricing](https://fly.io/docs/about/pricing/), and [Tailscale Funnel/Serve](https://tailscale.com/docs/features/tailscale-funnel).
 
-Payout signing is independent of the developer laptop only after the external signer has durable custody, an operator authorization ceremony, atomic nonce storage, backup/recovery, and a successful no-funds rehearsal. That evidence does not yet exist.
+Payout signing remains in the separately controlled MetaMask Chrome profile. A real transaction requires an operator authorization ceremony, confirmed profile/account custody, the durable coordinator journal, backup/recovery acceptance, a profile-backed no-funds rehearsal, and reviewed enablement of the otherwise absent browser adapter. That evidence does not yet exist.
 
 ## Release matrix
 
@@ -72,7 +74,7 @@ Payout signing is independent of the developer laptop only after the external si
 | Source canonical verification + relay | LOCALLY TESTED | Required pool, exact amount/output/diversifier, activation height/time, canonical block, confirmations, signed relay, replay, expiry, and unresolved paths pass. |
 | Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–013 bind quotes to owner requests, verified intents, receiver allocations, separate payment/confirmation deadlines, canonical Ironwood evidence, immutable revocation history, and recovery liabilities; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, confirmation delay, reorg, and payment mismatch. Not wired publicly. |
 | Base receipt verification | LOCALLY TESTED | Exact official-token Transfer, sender, recipient, amount, canonical block, confirmation, replay, and receipt authentication pass. |
-| External payout signer | BLOCKED | No independent signer/nonce service or recovery rehearsal exists. |
+| MetaMask payout path | PREPARED / DISABLED | Operator-only packet rehearsal, nonce constraints, durable recovery, restart, and canonical verification are locally tested. No real `eth_sendTransaction` call exists or is enabled. |
 | First owner-bound request | BLOCKED BY APPROVAL | Prerequisites can be reviewed, but creation is a durable mutation and was not authorized. |
 | First linked settlement/receipt | BLOCKED | No genuine source txid, payout txid, or authenticated linked receipt exists. |
 | Render public application | WORKING | HTTPS/health/smoke pass with financial flags closed; deployed assets reproduce commit `8374687`, not current main. |
