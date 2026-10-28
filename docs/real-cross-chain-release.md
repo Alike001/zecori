@@ -70,7 +70,7 @@ Payout signing is independent of the developer laptop only after the external si
 | Wallet A Ironwood health | LOCALLY TESTED | Fresh read-only RPC reports locked/synchronized and 98,465,000 usable ten-confirmation Ironwood zatoshis (the request stated 9,846,500); no unlock occurred. |
 | Wallet A rc2 send procedure | LOCALLY TESTED (read-only review) | Exact tagged source and binary behavior reviewed; no signing/broadcast was performed. |
 | Source canonical verification + relay | LOCALLY TESTED | Required pool, exact amount/output/diversifier, activation height/time, canonical block, confirmations, signed relay, replay, expiry, and unresolved paths pass. |
-| Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–012 bind quotes to owner requests and verified intents; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, and payment mismatch. Not wired publicly. |
+| Persistent multi-amount reservations | LOCALLY TESTED | Migrations 011–013 bind quotes to owner requests, verified intents, receiver allocations, separate payment/confirmation deadlines, canonical Ironwood evidence, immutable revocation history, and recovery liabilities; disposable PostgreSQL covers 0.01/0.02/0.05, concurrency, restart, expiry, confirmation delay, reorg, and payment mismatch. Not wired publicly. |
 | Base receipt verification | LOCALLY TESTED | Exact official-token Transfer, sender, recipient, amount, canonical block, confirmation, replay, and receipt authentication pass. |
 | External payout signer | BLOCKED | No independent signer/nonce service or recovery rehearsal exists. |
 | First owner-bound request | BLOCKED BY APPROVAL | Prerequisites can be reviewed, but creation is a durable mutation and was not authorized. |
