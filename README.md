@@ -16,13 +16,13 @@ This README describes the final privacy-first consumer UX candidate verified on 
 | --- | --- |
 | Product and route lifecycle | Implemented and locally tested; public route remains closed |
 | Route request creation | Disabled by default; requires current operator, liquidity, and fixed-term attestations |
-| Linked funded Zcash-to-Base settlement | **Not performed or verified** |
+| Linked funded Zcash-to-Base settlement | **One real linked testnet settlement completed and verified in the isolated private environment** |
 | Public deployment | **Live and HTTPS-verified at [zecori.iamalikex.tech](https://zecori.iamalikex.tech)** |
 | Public data/auth | Ten Neon migrations applied; liveness, readiness, guarded smoke, passkey sign-in, and one handle claim verified |
 | Mainnet or additional chains | **Not supported** |
-| Demo and video | Working demo verified; no final video URL is recorded yet |
+| Demo and video | Two-minute demo prepared and included in the submission; public video URL not yet recorded in this README |
 | Variable amounts | Isolated default-off test engine only; not connected to the route, API, UI, or deployment |
-| Final submission | **NO-GO until the video URL and human submission receipt exist** |
+| Final submission | **Submitted to Zecathon 2026**, as confirmed by the project author |
 
 The only implemented financial route is:
 
@@ -33,6 +33,20 @@ The only implemented financial route is:
 - **Provider model:** an experimental trusted testnet liquidity provider with temporary custody and separate manual payout approval.
 
 Do not send funds based on repository text, the public demo, or the nonfinancial walkthrough. Payment instructions are designed to appear only after an authenticated request, destination proof, operator acceptance, and validated receiver allocation.
+
+## First completed cross-chain testnet settlement
+
+During Zecathon 2026, Zecori completed one real, operator-assisted linked settlement:
+
+- **Source:** 0.01 shielded TAZ on Zcash Ironwood testnet.
+- **Destination:** 1 Circle test-USDC on Base Sepolia.
+- **Verification:** Canonical evidence checked on both chains.
+- **Result:** One verified payout credit and one authenticated private receipt.
+- **Safety:** No duplicate payout credit; spending controls remain disabled.
+
+The private pilot demonstrated the full settlement lifecycle, including destination ownership verification, unique receiver allocation, source confirmation, guarded payout and receipt reconciliation.
+
+**Limitations:** This is one verified testnet pilot, not a production-ready, trustless or automated bridge. The public website remains a nonfinancial demonstration with transaction execution disabled. Further routes, variable amounts and automated liquidity are future work.
 
 ## How the guarded workflow works
 
@@ -45,7 +59,7 @@ Do not send funds based on repository text, the public demo, or the nonfinancial
 7. Read-only verification checks the exact incoming Ironwood output and its confirmations. A separate operator approval is required before an external signer can submit the Base Sepolia payout.
 8. The backend verifies the canonical test-USDC transfer against the immutable recipient, amount, token contract, and approved sender before producing a private receipt.
 
-The code and fixture-backed tests cover this lifecycle. Settlement infrastructure, live chain integrations, operator liquidity, the external payout signer, and the first newly linked funded settlement remain unverified.
+The code and fixture-backed tests cover this lifecycle. One separately operated, genuine linked testnet settlement has since been completed and privately verified. Production deployment and general-purpose settlement capabilities remain unverified.
 
 ## Privacy and trust model
 
