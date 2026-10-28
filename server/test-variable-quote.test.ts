@@ -7,6 +7,7 @@ const rate: ApprovedTestRate = {
   approvedAt: '2026-10-28T10:00:00.000Z', expiresAt: '2026-10-28T11:00:00.000Z',
   destinationAtomicNumerator: '100', sourceAtomicDenominator: '1',
   feeBps: 25, fixedFeeDestinationAtomic: '7', minimumSourceAtomic: '1000', maximumSourceAtomic: '10000',
+  minimumDestinationAtomic: '1',
   liquidityCapacityDestinationAtomic: '199500',
 };
 const now = Date.parse('2026-10-28T10:15:00.000Z');
