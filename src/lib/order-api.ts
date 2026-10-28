@@ -35,7 +35,7 @@ export type PrivateReceipt = {
   sourceChain: 'zcash-testnet';
   destinationChain: 'base-sepolia';
   sourceAsset: 'TAZ';
-  destinationAsset: 'USDC';
+  destinationAsset: { symbol: 'USDC'; contract: string; decimals: 6; classification: 'Circle test token' };
   verifiedSourceAmount: string;
   verifiedDestinationAmount: string;
   actualKnownFees: Array<{ asset: string; amount: string }>;
@@ -46,6 +46,18 @@ export type PrivateReceipt = {
   verificationStatus: 'independently-verified';
   privacyClassification: string;
   printableNotice: string;
+};
+
+export type ShareableReceipt = {
+  receiptId: string;
+  kind: 'final';
+  destinationChain: 'base-sepolia';
+  destinationAsset: PrivateReceipt['destinationAsset'];
+  verificationStatus: 'independently-verified';
+  printableNotice: string;
+  orderReference: string;
+  privacyClassification: 'redacted-shareable';
+  redactions: string[];
 };
 
 export type PublicCapabilities = {
@@ -225,6 +237,10 @@ export async function getOrderRequest(id: string): Promise<PublicOrderRequest> {
 
 export async function getPrivateReceipt(receiptId: string): Promise<PrivateReceipt> {
   return (await parse<{ receipt: PrivateReceipt }>(await fetch(`/api/v1/receipts/${encodeURIComponent(receiptId)}/private`, { credentials: 'same-origin' }))).receipt;
+}
+
+export async function getShareableReceipt(receiptId: string): Promise<ShareableReceipt> {
+  return (await parse<{ receipt: ShareableReceipt }>(await fetch(`/api/v1/receipts/${encodeURIComponent(receiptId)}`, { credentials: 'same-origin' }))).receipt;
 }
 
 export async function sendAgentMessage(message: string, locale: 'en' | 'fr' | 'ar'): Promise<AgentReply> {

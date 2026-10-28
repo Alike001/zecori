@@ -59,7 +59,7 @@ try {
   const capture = async (name, width, height, mobile, selector) => {
     if (!screenshotDirectory) return;
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile }, sessionId);
-    if (selector) await send('Runtime.evaluate', { expression: `document.documentElement.style.scrollBehavior='auto';document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'start',behavior:'instant'})` }, sessionId);
+    if (selector) await send('Runtime.evaluate', { expression: `document.documentElement.style.scrollBehavior='auto';document.querySelector(${JSON.stringify(selector)})?.scrollIntoView({block:'start',behavior:'instant'});scrollBy(0,-180)` }, sessionId);
     const { data } = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false }, sessionId);
     await writeFile(join(screenshotDirectory, name), data, 'base64');
   };
@@ -122,13 +122,15 @@ try {
   if (closed.requestPresent || closed.walletPresent) throw new Error('Closed route rendered wallet or request controls');
   if (!await click('Explore how it works')) throw new Error('Nonfinancial walkthrough action missing');
   await waitFor(`document.body.innerText.includes('What happens only after the route reopens') && document.body.innerText.includes('Failed or uncertain states never become success')`, 'closed-route walkthrough');
-  for (const [width,height] of [[320,720],[390,844],[768,1024]]) {
+  for (const [width,height] of [[320,720],[375,812],[768,1024]]) {
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor:1, mobile:width<768 }, sessionId);
     const layout = await evaluate(`({width:document.documentElement.scrollWidth,viewport:document.documentElement.clientWidth})`);
     if (layout.width > layout.viewport) throw new Error(`Closed route layout overflows at ${width}px: ${layout.width} > ${layout.viewport}`);
   }
   await send('Emulation.setDeviceMetricsOverride', { width:390, height:844, deviceScaleFactor:1, mobile:true }, sessionId);
   await capture('route-mobile.png', 390, 844, true);
+  await capture('route-375.png', 375, 812, true);
+  await capture('route-768.png', 768, 1024, false);
   await capture('route-desktop.png', 1440, 1100, false);
   routeReadiness.operatorAttested=true; routeReadiness.liquidityReady=true; routeReadiness.termsValidUntil=new Date(Date.now()+60_000).toISOString();
   await send('Page.reload', {}, sessionId);
@@ -149,11 +151,13 @@ try {
   const noirState = await evaluate(`({text:document.body.innerText,authorized:window.__noirAuthorized,sendButtons:[...document.querySelectorAll('button')].filter(node=>/send transaction|send zec/i.test(node.textContent)).length})`);
   if (!noirState.authorized || noirState.sendButtons !== 0 || !noirState.text.includes('testnet/Ironwood unverified') || !noirState.text.includes('0.02 ZEC')) throw new Error(`Unsafe or incomplete Noir browser state: ${JSON.stringify(noirState)}`);
   await capture('noir-wallet-mobile.png', 390, 844, true, '.wallet-grid');
+  await capture('wallet-375.png', 375, 812, true, '.wallet-grid');
+  await capture('wallet-768.png', 768, 1024, false, '.wallet-grid');
   await capture('noir-wallet-desktop.png', 1440, 1100, false, '.wallet-grid');
   await send('Emulation.setDeviceMetricsOverride', { width:390, height:844, deviceScaleFactor:1, mobile:true }, sessionId);
   await evaluate(`scrollTo(0,0)`);
-  if (!await click('Use another Zcash wallet')) throw new Error('External Zcash-wallet option missing');
-  if (!await click('Use connected Base wallet')) throw new Error('Base wallet option missing');
+  if (!await click('Use external wallet instructions')) throw new Error('External Zcash-wallet option missing');
+  if (!await click('Check connected Base wallet')) throw new Error('Base wallet option missing');
   await waitFor(`document.body.innerText.includes('Switch the wallet to Base Sepolia')`, 'unsupported Base network rejection');
   if (!await click('Enter a recipient address')) throw new Error('Manual receiving-address option missing');
   await evaluate(`(() => { const input=document.querySelector('input[placeholder="0x…"]'); const event=new Event('paste',{bubbles:true,cancelable:true}); Object.defineProperty(event,'clipboardData',{value:{getData:()=> '0x${'1'.repeat(40)}\\u200b'}}); input.dispatchEvent(event); })()`);
@@ -188,6 +192,10 @@ try {
   await waitFor(`document.querySelector('.history-row')?.textContent.includes('Track / recover')`, 'actionable private request history');
   if (!await click('Track / recover')) throw new Error('Private history tracking action is missing');
   await waitFor(`location.pathname===${JSON.stringify(`/swap/${createdA.body.request.id}`)} && document.body.innerText.includes('Waiting for operator review') && document.body.innerText.includes('Open recovery guide')`, 'request-specific tracking and recovery guidance');
+  const verificationHierarchy = await evaluate(`({lifecycle:document.querySelector('.request-lifecycle')?.innerText,actions:document.querySelectorAll('.destination-verification-action').length,providers:document.querySelectorAll('.destination-verification-action .provider-selection,.destination-verification-action .provider-picker').length,text:document.querySelector('.destination-verification-action')?.innerText})`);
+  if (verificationHierarchy.actions !== 1 || verificationHierarchy.providers !== 1 || !verificationHierarchy.lifecycle?.includes('Awaiting operator') || !verificationHierarchy.text?.includes('purpose-limited EIP-712 signature')) throw new Error(`Destination verification hierarchy is unclear: ${JSON.stringify(verificationHierarchy)}`);
+  await capture('tracking-375.png', 375, 812, true, '#request-tracking');
+  await capture('tracking-768.png', 768, 1024, false, '#request-tracking');
   const paymentReceiver = `utest1${'q'.repeat(120)}`;
   const paymentRecord = store.requests.find(item => item.id === createdA.body.request.id);
   if (!paymentRecord) throw new Error('Disposable PAYMENT_READY fixture request was not found');
@@ -204,6 +212,8 @@ try {
   for (const term of ['exactly 0.01 taz','zcash testnet','ironwood shielded only','base sepolia','chain 84532',paymentRecord.terms.destination.contract.toLowerCase(),paymentRecord.privateIntent.destination.address.toLowerCase(),'immutable fixed terms','expiry']) if (!paymentReadyText.includes(term)) throw new Error(`PAYMENT_READY immutable term missing: ${term}`);
   if (paymentReadyText.includes('transparent fallback')) throw new Error('PAYMENT_READY offered a transparent fallback');
   if (paymentReady.width > paymentReady.viewport) throw new Error(`PAYMENT_READY mobile layout overflows: ${paymentReady.width} > ${paymentReady.viewport}`);
+  await capture('payment-ready-375.png', 375, 812, true, '.payment-instructions');
+  await capture('payment-ready-768.png', 768, 1024, false, '.payment-instructions');
   await evaluate(`Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async value=>{window.__copiedReceiver=value}}})`);
   if (!await click('Copy full receiver')) throw new Error('Exact receiver copy action missing');
   await waitFor(`window.__copiedReceiver===${JSON.stringify(paymentReceiver)}`, 'exact clipboard receiver');
