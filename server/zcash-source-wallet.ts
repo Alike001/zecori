@@ -78,7 +78,12 @@ export type SourceWalletHealth = {
   fullPrivacyCompatible: boolean;
 };
 
-export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: string, now = Date.now()): Promise<SourceWalletHealth> {
+export type SourceWalletSubmissionHealth = Omit<SourceWalletHealth, 'locked'> & {
+  locked: false;
+  unlockedUntil: number;
+};
+
+async function inspectSourceWalletA(rpc: RpcCall | undefined, expectedWalletName: string | undefined, now: number, lockState: 'LOCKED' | 'UNLOCKED'): Promise<SourceWalletHealth | SourceWalletSubmissionHealth> {
   let call = rpc;
   let walletName = expectedWalletName ?? 'default';
   if (!call) {
@@ -97,7 +102,9 @@ export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: str
   if (wallet.walletname !== walletName) throw new Error('Wallet A identity does not match the configured wallet name');
   if (wallet.private_keys_enabled !== true) throw new Error('Wallet A is not an owned spending wallet');
   if (wallet.scanning !== false || wallet.import_error || wallet.enhanced_through !== chain.blocks) throw new Error('Wallet A history is incomplete');
-  if (wallet.unlocked_until !== 0) throw new Error('Wallet A must remain encrypted and locked');
+  if (!Number.isSafeInteger(wallet.unlocked_until) || (wallet.unlocked_until as number) < 0) throw new Error('Wallet A lock state is invalid');
+  if (lockState === 'LOCKED' && wallet.unlocked_until !== 0) throw new Error('Wallet A must remain encrypted and locked');
+  if (lockState === 'UNLOCKED' && (wallet.unlocked_until as number) <= Math.floor(now / 1_000)) throw new Error('Wallet A must be explicitly unlocked for the separately approved broadcast window');
   if (!Array.isArray(unspent)) throw new Error('Wallet A listunspent response is invalid');
 
   const pools = new Map<string, bigint>();
@@ -114,12 +121,23 @@ export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: str
   const ironwood = pools.get('ironwood') ?? 0n;
   if (aggregate < ironwood) throw new Error('Wallet A pool-specific balance exceeds its aggregate confirmed balance');
   const sufficient = aggregate >= SOURCE_REQUIRED_ZATOSHIS && ironwood >= SOURCE_REQUIRED_ZATOSHIS;
-  return {
-    network: 'zcash-testnet', synchronized: true, historyComplete: true, locked: true, walletOwned: true,
-    walletName, blocks: chain.blocks as number, account: 0, minimumConfirmations: SOURCE_MINIMUM_CONFIRMATIONS,
+  const common = {
+    network: 'zcash-testnet' as const, synchronized: true as const, historyComplete: true as const, walletOwned: true as const,
+    walletName, blocks: chain.blocks as number, account: 0 as const, minimumConfirmations: 10 as const,
     confirmedZatoshis: ironwood.toString(), aggregateConfirmedZatoshis: aggregate.toString(), ironwoodUsableZatoshis: ironwood.toString(),
     poolZatoshis: Object.fromEntries([...pools.entries()].map(([pool, amount]) => [pool, amount.toString()])),
     requiredZatoshis: SOURCE_REQUIRED_ZATOSHIS.toString(), sufficientForPaymentAndFeeReserve: sufficient,
     fullPrivacyCompatible: ironwood >= SOURCE_REQUIRED_ZATOSHIS,
   };
+  return lockState === 'LOCKED'
+    ? { ...common, locked: true }
+    : { ...common, locked: false, unlockedUntil: wallet.unlocked_until as number };
+}
+
+export async function checkSourceWalletA(rpc?: RpcCall, expectedWalletName?: string, now = Date.now()): Promise<SourceWalletHealth> {
+  return inspectSourceWalletA(rpc, expectedWalletName, now, 'LOCKED') as Promise<SourceWalletHealth>;
+}
+
+export async function checkSourceWalletAForSubmission(rpc?: RpcCall, expectedWalletName?: string, now = Date.now()): Promise<SourceWalletSubmissionHealth> {
+  return inspectSourceWalletA(rpc, expectedWalletName, now, 'UNLOCKED') as Promise<SourceWalletSubmissionHealth>;
 }

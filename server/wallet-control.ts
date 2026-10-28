@@ -11,6 +11,11 @@ export const WALLET_CONTROL_CHAIN_ID = 84532 as const;
 export const WALLET_CONTROL_PURPOSE = 'Verify control of this Base Sepolia destination for one Zecori destination intent. This does not authorize payment, payout, or any transaction.' as const;
 export const WALLET_CONTROL_DOMAIN = Object.freeze({ name: 'Zecori Destination Control', version: '1', chainId: WALLET_CONTROL_CHAIN_ID });
 export const WALLET_CONTROL_TYPES = Object.freeze({
+  EIP712Domain: [
+    { name: 'name', type: 'string' },
+    { name: 'version', type: 'string' },
+    { name: 'chainId', type: 'uint256' },
+  ],
   DestinationControl: [
     { name: 'owner', type: 'bytes32' }, { name: 'session', type: 'bytes32' },
     { name: 'intentId', type: 'string' }, { name: 'recipient', type: 'address' },
@@ -86,7 +91,7 @@ export class BaseSepoliaWalletControlVerifier {
       let recovered: Address;
       try { recovered = await recoverTypedDataAddress({ ...typedData, signature } as Parameters<typeof recoverTypedDataAddress>[0]); }
       catch { throw Object.assign(new Error('Wallet signature is invalid.'), { code: 'INVALID_WALLET_SIGNATURE' }); }
-      if (recovered.toLowerCase() !== recipient.toLowerCase()) throw Object.assign(new Error('Wallet signature does not match the immutable recipient.'), { code: 'WALLET_SIGNER_MISMATCH' });
+      if (normalizeEvmAddress(recovered) !== normalizeEvmAddress(recipient)) throw Object.assign(new Error('Wallet signature does not match the immutable recipient.'), { code: 'WALLET_SIGNER_MISMATCH' });
       method = 'EIP712_EOA';
     } else {
       if (!this.policy.allowContractWallets) throw Object.assign(new Error('Contract-wallet destination verification is disabled for this release.'), { code: 'CONTRACT_WALLET_DISABLED' });

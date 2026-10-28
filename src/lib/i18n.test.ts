@@ -35,6 +35,7 @@ test('every lifecycle state has localized, fail-closed user guidance', () => {
 });
 
 test('request tracking translates known reason codes and never renders private operator text', () => {
+  assert.match(publicResolutionReason('accepted-unallocated-expired'), /before any payment receiver/i);
   assert.match(publicResolutionReason('private-verifier:REORG_DETECTED'), /reorganization/i);
   const privateText='private operator note with wallet evidence';
   const rendered=publicResolutionReason(privateText);

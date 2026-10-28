@@ -8,6 +8,7 @@ import {
   sessionFingerprint, type DestinationControlTypedData, type WalletControlProof,
 } from './wallet-control.ts';
 import type { AuthenticatedUser } from './user-auth.ts';
+import { normalizeEvmAddress } from '../src/lib/evm-address.ts';
 
 export type DestinationChallenge = { challengeId: string; requestId: string; intentId: string; recipient: Address; expiresAt: string; typedData: DestinationControlTypedData };
 export type DestinationVerification = { requestId: string; intentId: string; status: 'verified'; method: 'eip712-eoa' | 'erc1271'; verifiedAt: string };
@@ -55,7 +56,7 @@ export class PostgresDestinationWalletControl implements DestinationWalletContro
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      await client.query(`UPDATE destination_wallet_challenges SET status='EXPIRED',consumed_at=$2 WHERE intent_id=$1 AND status='ISSUED' AND expires_at <= $2`, [row.intent_id, new Date(now)]);
+      await client.query(`UPDATE destination_wallet_challenges SET status='EXPIRED',consumed_at=$2 WHERE intent_id=$1 AND status='ISSUED'`, [row.intent_id, new Date(now)]);
       await client.query(`INSERT INTO destination_wallet_challenges(challenge_id,intent_id,owner_user_id,session_hash,recipient_fingerprint,nonce_hash,encrypted_challenge,encryption_key_version,issued_at,expires_at,status)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'ISSUED')`, [challengeId,row.intent_id,session.userId,Buffer.from(sessionFingerprint(session.sessionToken).slice(2),'hex'),row.recipient_fingerprint,hash(nonce),encrypted,this.encryption.activeVersion,new Date(issuedAt),new Date(expiresAt)]);
       await client.query(`INSERT INTO destination_wallet_audit_events(intent_id,challenge_id,actor_type,actor_fingerprint,event_type,occurred_at,details) VALUES($1,$2,'USER',$3,'CHALLENGE_ISSUED',$4,$5)`, [row.intent_id,challengeId,hash(session.userId),new Date(now),{ chainId:84532, origin, purpose:'destination-control', expiresAt:new Date(expiresAt).toISOString() }]);
@@ -81,7 +82,7 @@ export class PostgresDestinationWalletControl implements DestinationWalletContro
     const typedData = this.encryption.decrypt<DestinationControlTypedData>(row.encrypted_challenge, challengeContext(challengeId));
     if (typedData.message.owner !== `0x${hash(session.userId).toString('hex')}` || typedData.message.session !== sessionFingerprint(session.sessionToken) || typedData.message.origin !== origin || typedData.message.intentId !== row.intent_id) throw new Error('Wallet-control challenge binding mismatch');
     const intent = this.encryption.decrypt<DestinationIntentPayload>(row.encrypted_intent, destinationIntentContext(row.intent_id)); assertDestinationPayload(intent);
-    if (typedData.message.recipient.toLowerCase() !== intent.destination.address.toLowerCase() || !row.recipient_fingerprint.equals(destinationRecipientFingerprint(intent.destination.address))) throw new Error('Wallet-control recipient binding mismatch');
+    if (normalizeEvmAddress(typedData.message.recipient) !== normalizeEvmAddress(intent.destination.address) || !row.recipient_fingerprint.equals(destinationRecipientFingerprint(intent.destination.address))) throw new Error('Wallet-control recipient binding mismatch');
     let proof: WalletControlProof;
     try { proof = await this.verifier.verify(typedData, provided, now); }
     catch (error) {

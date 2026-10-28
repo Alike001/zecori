@@ -199,6 +199,7 @@ test('wallet intent rejects invalid recipients, unsupported networks, and premat
   const created = await submit(walletIntent);
   assert.equal(created.status, 202); const body = await created.json() as { request: { id: string; paymentInstructions?: unknown; destinationRecipient?: unknown; destinationBinding: { walletControlVerification: string } } };
   assert.equal(body.request.paymentInstructions, undefined); assert.equal(body.request.destinationRecipient, undefined); assert.equal(body.request.destinationBinding.walletControlVerification, 'unverified');
+  assert.equal((body.request as { destinationReview?: { recipient: string } }).destinationReview?.recipient, walletIntent.destination.address, 'the authenticated owner receives the exact reviewed recipient for verification retry');
   assert.equal((await store.list('11111111-1111-4111-8111-111111111111')).length, 1);
   assert.equal(await store.get('22222222-2222-4222-8222-222222222222', body.request.id), undefined);
   const repeat = await submit(walletIntent); assert.equal(repeat.status, 202); assert.equal(((await repeat.json()) as { request: { id: string } }).request.id, body.request.id);

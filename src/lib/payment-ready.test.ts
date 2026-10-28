@@ -8,7 +8,7 @@ const recipient = '0x1111111111111111111111111111111111111111';
 function fixture(overrides: Partial<PublicOrderRequest> = {}): PublicOrderRequest {
   const expiresAt = '2030-01-01T00:00:00.000Z';
   return {
-    id: 'payment-ready-fixture', status: 'PAYMENT_READY', createdAt: '2029-12-31T23:00:00.000Z', expiresAt,
+    id: 'payment-ready-fixture', status: 'PAYMENT_READY', createdAt: '2029-12-31T22:30:00.000Z', expiresAt: '2029-12-31T23:00:00.000Z', paymentDeadline: expiresAt,
     destinationBinding: { status: 'bound', walletControlVerification: 'verified-eoa' },
     terms: {
       source: { network: 'zcash-testnet', asset: 'TAZ', pool: 'ironwood', amountZatoshis: '1000000', amount: '0.01', confirmations: 10 },
@@ -40,6 +40,7 @@ test('instructions fail closed before allocation, after expiry, after status adv
   assert.throws(() => preparePaymentReadyInstructions(fixture({ paymentInstructions: undefined }), 0), /not actionable/);
   assert.throws(() => preparePaymentReadyInstructions(fixture(), Date.parse('2030-01-01T00:00:00.001Z')), /expired/);
   assert.throws(() => preparePaymentReadyInstructions(fixture({ status: 'SOURCE_DETECTED' }), 0), /not actionable/);
+  assert.throws(() => preparePaymentReadyInstructions(fixture({ paymentDeadline: '2030-01-01T00:01:00.000Z' }), 0), /immutable order expiry/);
   const changed = fixture(); changed.destinationReview = { ...changed.destinationReview!, chainId: 84532, contract: '0x1111111111111111111111111111111111111111' };
   assert.throws(() => preparePaymentReadyInstructions(changed, 0), /does not match/);
 });

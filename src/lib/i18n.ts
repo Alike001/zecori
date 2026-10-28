@@ -92,7 +92,7 @@ const orderGuidance: Record<SupportedLocale, Record<string, OrderGuidance>> = {
     REFUND_PENDING: { title: 'Manual refund review required', body: 'A refund is not yet confirmed or guaranteed. Do not resend funds; keep the private request ID for operator support.' },
     REFUNDED: { title: 'Refund independently recorded', body: 'Review the authenticated timeline. Do not treat this label as evidence for any different request.' },
     UNRESOLVED: { title: 'Evidence needs manual reconciliation', body: 'Verification may be delayed, unavailable, ambiguous, or affected by a reorganization. Do not resend or retry; keep the private request ID.' },
-    EXPIRED: { title: 'This request expired', body: 'Do not use old instructions or send funds. Create a new request only when the route is open again.' },
+    EXPIRED: { title: 'Expired — no active payment instructions', body: 'The request deadline passed. Do not send funds or use any old instructions; create a new request only when the route is open again.' },
     CANCELLED: { title: 'This request was cancelled', body: 'Do not use its payment instructions. Create a new request only if you still intend to use the route.' },
   },
   fr: {
@@ -137,6 +137,7 @@ export function translateOrderGuidance(locale: SupportedLocale, status: string):
 }
 
 const safeResolutionReasons: Record<string, string> = {
+  'accepted-unallocated-expired': 'The accepted request expired before any payment receiver was allocated or published.',
   'expired-before-activation': 'The request expired before payment instructions were activated.',
   'expired-during-address-recovery': 'The request expired while its dedicated receiver allocation was being recovered.',
   'late-source-payment': 'A source payment was detected after the payment deadline and requires manual refund review.',

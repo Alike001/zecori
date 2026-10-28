@@ -3,10 +3,16 @@ export type RpcCall = <T>(method: string, params?: unknown[]) => Promise<T>;
 type RpcEnvelope<T> = { result?: T; error?: { code?: number; message?: string } | null };
 
 export type ExactJsonInteger = { readonly __exactJsonInteger: string };
+export type ExactJsonDecimal = { readonly __exactJsonDecimal: string };
 
 export function exactJsonInteger(value: string): ExactJsonInteger {
   if (!/^\d+$/.test(value)) throw new Error('Exact JSON integer must be unsigned decimal');
   return Object.freeze({ __exactJsonInteger: BigInt(value).toString() });
+}
+
+export function exactJsonDecimal(value: string): ExactJsonDecimal {
+  if (!/^(0|[1-9]\d*)\.\d{1,8}$/.test(value)) throw new Error('Exact JSON decimal must have one to eight decimal places');
+  return Object.freeze({ __exactJsonDecimal: value });
 }
 
 function serializeJson(value: unknown): string {
@@ -20,6 +26,7 @@ function serializeJson(value: unknown): string {
   if (typeof value === 'object') {
     const object = value as Record<string, unknown>;
     if (Object.keys(object).length === 1 && typeof object.__exactJsonInteger === 'string') return exactJsonInteger(object.__exactJsonInteger).__exactJsonInteger;
+    if (Object.keys(object).length === 1 && typeof object.__exactJsonDecimal === 'string') return exactJsonDecimal(object.__exactJsonDecimal).__exactJsonDecimal;
     return `{${Object.entries(object).filter(([, item]) => item !== undefined).map(([key, item]) => `${JSON.stringify(key)}:${serializeJson(item)}`).join(',')}}`;
   }
   throw new Error('Unsupported JSON-RPC parameter type');

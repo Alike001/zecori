@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { exactJsonInteger, jsonRpcClient, parseJsonPreservingIntegers } from './rpc-client.ts';
+import { exactJsonDecimal, exactJsonInteger, jsonRpcClient, parseJsonPreservingIntegers } from './rpc-client.ts';
 
 test('preserves arbitrary-precision response integers as exact decimal strings', () => {
   const parsed = parseJsonPreservingIntegers('{"result":{"diversifier_index":309485009821345068724781055}}') as { result: { diversifier_index: string } };
@@ -26,6 +26,18 @@ test('serializes an explicit arbitrary-precision RPC integer without quotes', as
     assert.match(body, /,309485009821345068724781055\]/);
     assert.doesNotMatch(body, /"309485009821345068724781055"/);
     assert.equal(result.diversifier_index, '309485009821345068724781055');
+  } finally { globalThis.fetch = original; }
+});
+
+test('serializes an explicit exact ZEC decimal without binary floating-point drift', async () => {
+  let body = '';
+  const original = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => { body = String(init?.body); return new Response('{"result":"opid-test","error":null}'); };
+  try {
+    const rpc = jsonRpcClient('http://127.0.0.1:1');
+    await rpc('TEST-ONLY-z_sendmany-shape', ['ANY_ORCHARD', [{ address: 'utest1fixture', amount: exactJsonDecimal('0.01000000') }], 10, null, 'FullPrivacy']);
+    assert.match(body, /"amount":0\.01000000/);
+    assert.doesNotMatch(body, /"amount":"0\.01000000"/);
   } finally { globalThis.fetch = original; }
 });
 

@@ -32,8 +32,6 @@ services:
         sync: false
       - key: ZECORI_DEPLOYMENT_KIND
         value: public-judge-demo
-      - key: ZECORI_JUDGE_MIGRATIONS_ACK
-        value: MIGRATE_ISOLATED_JUDGE_DATABASE
       - key: ZECATHON_ROUTE_REQUESTS_ENABLED
         value: "0"
       - key: ZECATHON_ROUTE_LIQUIDITY_READY
@@ -43,4 +41,6 @@ services:
       - key: PRIVY_AUTH_ENABLED
         value: "0"
       - key: VOICE_ENABLED
+        value: "0"
+      - key: ZECATHON_TEST_VARIABLE_QUOTES_ENABLED
         value: "0"

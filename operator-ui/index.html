@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Zecori private settlement operator</title><link rel="stylesheet" href="/style.css"></head><body><main>
+<h1>Private settlement operator</h1><p>Base Sepolia • chain 84532 • manual operator approval</p>
+<form id="login"><label>Private local login token <input id="token" type="password" autocomplete="off" required></label><button>Authenticate</button></form>
+<section id="workspace" hidden><label>Persisted packet ID <input id="packetId" autocomplete="off"></label><button id="load">Load packet</button><pre id="preview"></pre>
+<button id="connect">Connect MetaMask</button><button id="rehearse" disabled>Read-only preflight</button>
+<label>Type the exact displayed broadcast confirmation <textarea id="confirmation" rows="4" autocomplete="off"></textarea></label><button id="submit" disabled>Submit once in MetaMask</button>
+<h2>Reconciliation</h2><p>A hash is a submission reference. Completion requires canonical evidence on both chains. An uncertain submission must never be sent again.</p>
+<button id="reconcile">Inspect chain and durable journal</button><label>Original transaction hash <input id="hash" autocomplete="off"></label><label>Type RECOVER BASE-84532 &lt;packet ID&gt; &lt;lowercase hash&gt; NO-RETRY <textarea id="recovery" rows="3"></textarea></label><button id="recover">Reconcile exact hash without wallet prompt</button><button id="finish">Verify both chains and linked receipt</button></section>
+<pre id="status" role="status"></pre></main><script type="module" src="/client.mjs"></script></body></html>

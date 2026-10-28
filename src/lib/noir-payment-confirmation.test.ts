@@ -5,7 +5,7 @@ import { prepareNoirPaymentConfirmation } from './noir-payment-confirmation.ts';
 
 function request(expiresAt = '2030-01-01T00:00:00.000Z'): PublicOrderRequest {
   return {
-    id: 'order-1', status: 'PAYMENT_READY', createdAt: '2029-12-31T23:00:00.000Z', expiresAt,
+    id: 'order-1', status: 'PAYMENT_READY', createdAt: '2029-12-31T22:00:00.000Z', expiresAt: '2029-12-31T23:00:00.000Z', paymentDeadline: expiresAt,
     destinationBinding: { status: 'bound', walletControlVerification: 'verified-eoa' },
     terms: {
       source: { network: 'zcash-testnet', asset: 'TAZ', pool: 'ironwood', amountZatoshis: '1000000', amount: '0.01', confirmations: 10 },

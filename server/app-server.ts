@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import type { PublicOrderRequestStore } from './public-order-store.ts';
 import { PostgresPublicOrderRequestStore } from './public-order-store.ts';
 import { createPostgresPool } from './postgres.ts';
+import { loadPrivateRequestWindow } from './private-request-window.ts';
 import { publicApi } from './public-api.ts';
 import { loadEncryptionKeyring } from './data-encryption.ts';
 import { PostgresPasskeyAuth, type UserIdentityService } from './user-auth.ts';
@@ -190,6 +191,7 @@ async function start(): Promise<void> {
   if (rpId.includes('://') || rpId.includes('/') || !(parsedOrigin.hostname === rpId || parsedOrigin.hostname.endsWith(`.${rpId}`))) throw new Error('WEBAUTHN_RP_ID must equal the public hostname or be its registrable parent domain');
   const pool = createPostgresPool();
   const encryption = await loadEncryptionKeyring();
+  const requestWindow = await loadPrivateRequestWindow(process.env.ZECORI_PRIVATE_REQUEST_WINDOW_FILE, publicOrigin, process.env.DATABASE_URL);
   const auth = new PostgresPasskeyAuth(pool, { rpName: 'Zecori', rpId, expectedOrigin: publicOrigin, secureCookies: process.env.NODE_ENV === 'production' });
   const privyFlag = process.env.PRIVY_AUTH_ENABLED ?? '0';
   if (!['0', '1'].includes(privyFlag)) throw new Error('PRIVY_AUTH_ENABLED must be exactly 0 or 1');
@@ -214,7 +216,7 @@ async function start(): Promise<void> {
   if (!walletVerifier) throw new Error('BASE_SEPOLIA_RPC_URL is required for destination wallet verification');
   const agentRequestsPerMinute = Number(process.env.AI_AGENT_REQUESTS_PER_MINUTE ?? '10');
   if (!Number.isSafeInteger(agentRequestsPerMinute) || agentRequestsPerMinute < 1 || agentRequestsPerMinute > 60) throw new Error('AI_AGENT_REQUESTS_PER_MINUTE must be an integer from 1 to 60.');
-  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption), auth, userFeatures: new PostgresUserFeatures(pool, encryption), walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, routeReadiness: { operatorAttested: routeRequestsFlag === '1', liquidityReady: routeLiquidityFlag === '1', termsValidUntil: process.env.ZECATHON_ROUTE_TERMS_VALID_UNTIL }, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), ...(speech.provider ? { speech: speech.provider } : {}), speechStatus: speech.status, agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1', ...(privy ? { privy, privyAppId } : {}) });
+  const server = createApplicationServer({ store: new PostgresPublicOrderRequestStore(pool, encryption, requestWindow), auth, userFeatures: new PostgresUserFeatures(pool, encryption), walletControl: new PostgresDestinationWalletControl(pool, encryption, walletVerifier), contractWalletsEnabled: walletPolicy.allowContractWallets, routeReadiness: { operatorAttested: routeRequestsFlag === '1', liquidityReady: routeLiquidityFlag === '1', termsValidUntil: process.env.ZECATHON_ROUTE_TERMS_VALID_UNTIL }, agent: createAgentGateway(agentProvider.provider, agentProvider.status.model, { maxProviderCalls: agentProvider.maxProviderCalls, maxOutputTokens: agentProvider.status.limits.maxOutputTokens, status: agentProvider.status }), ...(speech.provider ? { speech: speech.provider } : {}), speechStatus: speech.status, agentRateLimit: { windowMs: 60_000, maximum: agentRequestsPerMinute }, publicOrigin, requireProxyHttps: process.env.NODE_ENV === 'production', trustProxy: process.env.TRUST_PROXY === '1', ...(privy ? { privy, privyAppId } : {}) });
   server.listen(port, host, () => process.stdout.write(`${JSON.stringify({ level: 'info', event: 'server_started', host, port })}\n`));
   const shutdown = () => server.close(() => { void pool.end().finally(() => process.exit(0)); });
   process.once('SIGTERM', shutdown); process.once('SIGINT', shutdown);

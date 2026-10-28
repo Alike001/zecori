@@ -33,7 +33,7 @@ export function preparePaymentReadyInstructions(request: PublicOrderRequest, now
     throw new Error('Verified payment instructions are not actionable.');
   }
   const expiry = Date.parse(request.paymentInstructions.expiresAt);
-  if (!Number.isFinite(expiry) || expiry <= now || request.paymentInstructions.expiresAt !== request.expiresAt) {
+  if (!Number.isFinite(expiry) || expiry <= now || !request.paymentDeadline || request.paymentInstructions.expiresAt !== request.paymentDeadline) {
     throw new Error('Payment instructions are expired or do not match the immutable order expiry.');
   }
   const { source, destination, provider } = request.terms;
