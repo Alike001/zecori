@@ -30,7 +30,12 @@ type AuthorizationVerifier = (domain: 'allocation-authorization-v1' | 'payout-au
 type OrderRow = {
   order_id: string; owner_session_hash: Buffer; immutable_manifest: { binding: OperatorOrderBinding; requestId: string };
   public_view: Record<string, unknown>; encrypted_private_state: Buffer; encryption_key_version: number;
-  status: PaymentOrder['status']; state_version: string; created_at: Date; expires_at: Date; accepted_by: string;
+  status: PaymentOrder['status'] | 'EXPIRED'; state_version: string; created_at: Date; expires_at: Date; accepted_by: string;
+};
+
+type AcceptedOrderState = { phase: 'ACCEPTED'; requestId: string; binding: OperatorOrderBinding; operatorId: string };
+type ExpiredAcceptedOrderState = Omit<AcceptedOrderState, 'phase'> & {
+  phase: 'EXPIRED'; status: 'EXPIRED'; expiredAt: string; resolutionReason: 'accepted-unallocated-expired';
 };
 
 export type PendingRequest = {
@@ -87,8 +92,8 @@ export class PostgresSettlementStore {
   constructor(pool: Pool, encryption: DataEncryption, walletVerifier?: BaseSepoliaWalletControlVerifier) { this.pool = pool; this.encryption = encryption; this.walletVerifier = walletVerifier; }
 
   async health(): Promise<void> {
-    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control']]);
-    if (result.rowCount !== 5) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, or wallet-control migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control', '015_accepted_order_expiry']]);
+    if (result.rowCount !== 6) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, wallet-control, or accepted-expiry migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
@@ -498,7 +503,26 @@ export class PostgresSettlementStore {
     return { authentic: true, orderId: row.order_id };
   }
 
-  async expire(orderId: string, now = Date.now()): Promise<void> { await this.transition(orderId, 'SYSTEM', undefined, 'ORDER_EXPIRED', now, order => expireOrder(order, now)); }
+  async expire(orderId: string, now = Date.now()): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const row = await this.lockOrder(client, orderId);
+      const privateState = this.encryption.decrypt<unknown>(row.encrypted_private_state, orderContext(orderId));
+      const preliminary = this.preliminaryState(privateState);
+      if (row.status === 'EXPIRED' || preliminary) {
+        await this.expireAcceptedOrder(client, row, privateState, now);
+        await client.query('COMMIT');
+        return;
+      }
+      if (!this.isPaymentOrder(privateState)) throw new Error('Order private state is ambiguous and cannot be expired safely');
+      const next = expireOrder(privateState, now);
+      await this.updateOrder(client, row, next, now);
+      await this.syncRequestStatus(client, orderId, next.status, now);
+      await this.audit(client, orderId, 'SYSTEM', undefined, 'ORDER_EXPIRED', {});
+      await client.query('COMMIT');
+    } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
+  }
   async setUnresolved(orderId: string, operatorId: string, reason: string, now = Date.now()): Promise<void> { await this.transition(orderId, 'OPERATOR', operatorId, 'ORDER_MARKED_UNRESOLVED', now, order => markUnresolved(order, reason)); }
 
   async timeline(ownerId: string, orderId: string): Promise<Array<{ type: string; at: string; actor: string; details: Record<string, unknown> }>> {
@@ -527,6 +551,76 @@ export class PostgresSettlementStore {
     const result = await client.query(`UPDATE orders SET status=$2,public_view=$3,encrypted_private_state=$4,encryption_key_version=$5,state_version=state_version+1,updated_at=$6 WHERE order_id=$1 AND state_version=$7`, [row.order_id, order.status, publicOrder(order), this.encryption.encrypt(order, orderContext(row.order_id)), this.encryption.activeVersion, new Date(now), row.state_version]);
     if (result.rowCount !== 1) throw new Error('Concurrent order update rejected');
   }
+
+  private preliminaryState(value: unknown): AcceptedOrderState | ExpiredAcceptedOrderState | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const candidate = value as { phase?: unknown };
+    return candidate.phase === 'ACCEPTED' || candidate.phase === 'EXPIRED' ? candidate as AcceptedOrderState | ExpiredAcceptedOrderState : undefined;
+  }
+
+  private isPaymentOrder(value: unknown): value is PaymentOrder {
+    if (!value || typeof value !== 'object') return false;
+    const candidate = value as Partial<PaymentOrder>;
+    return typeof candidate.id === 'string' && typeof candidate.status === 'string'
+      && typeof candidate.expiresAt === 'string' && typeof candidate.allocationId === 'string'
+      && typeof candidate.sourceReceiver === 'string' && typeof candidate.sourceDiversifierIndex === 'string'
+      && typeof candidate.sourceNotBeforeHeight === 'number' && Boolean(candidate.payoutAuthorization);
+  }
+
+  private async expireAcceptedOrder(client: PoolClient, row: OrderRow, privateState: unknown, now: number): Promise<void> {
+    if (row.expires_at.getTime() > now) throw new Error('Order has not expired');
+    if (row.status !== 'CREATED' && row.status !== 'EXPIRED') throw new Error('Accepted order is not in an expirable preliminary state');
+    const state = this.preliminaryState(privateState);
+    if (!state) throw new Error('Accepted order private state is missing or ambiguous');
+    const expectedPhase = row.status === 'CREATED' ? 'ACCEPTED' : 'EXPIRED';
+    if (state.phase !== expectedPhase) throw new Error('Accepted order SQL and encrypted states do not match');
+    if (state.requestId !== row.order_id || state.operatorId !== row.accepted_by || !isDeepStrictEqual(state.binding, row.immutable_manifest.binding)) throw new Error('Accepted order encrypted state does not match its immutable manifest');
+    if (row.immutable_manifest.requestId !== row.order_id || state.binding.orderId !== row.order_id
+      || state.binding.expiresAt !== row.expires_at.toISOString()) throw new Error('Accepted order manifest identity or immutable deadline does not match');
+    validateOperatorOrderBinding(state.binding, row.created_at.getTime());
+    await this.validateAcceptedOrder(client, row, row.accepted_by, row.created_at.getTime(), [row.status === 'CREATED' ? 'ACCEPTED' : 'EXPIRED'], false);
+
+    const allocations = await client.query<{ journal_phase: string }>('SELECT journal_phase FROM address_allocation_journal WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const authorizations = await client.query<{ kind: AuthorizationKind; state: string }>('SELECT kind,state FROM authorization_records WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const evidence = await client.query<{ chain: string }>('SELECT chain FROM settlement_evidence WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const references = await client.query<{ reference_kind: string }>('SELECT reference_kind FROM replay_references WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const verificationJobs = await client.query<{ state: string }>('SELECT state FROM private_verification_jobs WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const sourceOperations = await client.query<{ state: string }>('SELECT state FROM source_payment_operation_packets WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const payoutPackets = await client.query<{ state: string }>('SELECT state FROM base_payout_signing_packets WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const receipts = await client.query('SELECT receipt_id FROM receipts WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    const quotes = await client.query<{ status: string }>('SELECT status FROM test_variable_quote_reservations WHERE order_id=$1 FOR UPDATE', [row.order_id]);
+    if (allocations.rowCount) throw new Error('Accepted order has an allocated or in-flight receiver and cannot use unallocated expiry');
+    if (authorizations.rows.some(record => record.kind === 'PAYOUT')) throw new Error('Accepted order has a payout obligation and cannot be expired');
+    if (authorizations.rows.some(record => record.kind === 'ADDRESS_ALLOCATION' && !['ISSUED','EXPIRED','REVOKED','CANCELLED'].includes(record.state))) throw new Error('Accepted order has an ambiguous allocation authorization and cannot be expired');
+    if (evidence.rowCount || references.rowCount || verificationJobs.rowCount || sourceOperations.rowCount) throw new Error('Accepted order has source-payment evidence or an in-flight payment operation and cannot be expired');
+    if (payoutPackets.rowCount || receipts.rowCount || quotes.rowCount) throw new Error('Accepted order has a payout or quote obligation and cannot be expired');
+    if (row.public_view.id !== row.order_id || row.public_view.expiresAt !== row.expires_at.toISOString()
+      || row.public_view.status !== expectedPhase.replace('ACCEPTED', 'CREATED')) throw new Error('Accepted order public and SQL states do not match');
+
+    if (row.status === 'EXPIRED') {
+      const expired = state as ExpiredAcceptedOrderState;
+      if (expired.status !== 'EXPIRED' || expired.resolutionReason !== 'accepted-unallocated-expired' || typeof expired.expiredAt !== 'string') throw new Error('Expired accepted-order state is inconsistent');
+      return;
+    }
+
+    const expiredAt = new Date(now).toISOString();
+    const expiredState: ExpiredAcceptedOrderState = {
+      ...state as AcceptedOrderState, phase: 'EXPIRED', status: 'EXPIRED', expiredAt,
+      resolutionReason: 'accepted-unallocated-expired',
+    };
+    const publicView = {
+      id: row.order_id, createdAt: row.created_at.toISOString(), status: 'EXPIRED', expiresAt: row.expires_at.toISOString(),
+      resolutionReason: expiredState.resolutionReason,
+    };
+    const updated = await client.query(`UPDATE orders SET status='EXPIRED',public_view=$2,encrypted_private_state=$3,encryption_key_version=$4,state_version=state_version+1,updated_at=$5 WHERE order_id=$1 AND status='CREATED' AND state_version=$6`, [
+      row.order_id, publicView, this.encryption.encrypt(expiredState, orderContext(row.order_id)), this.encryption.activeVersion, new Date(now), row.state_version,
+    ]);
+    if (updated.rowCount !== 1) throw new Error('Concurrent accepted-order expiry rejected');
+    const request = await client.query(`UPDATE public_order_requests SET status='EXPIRED',updated_at=$2 WHERE request_id=$1 AND status='ACCEPTED' AND linked_order_id=$1`, [row.order_id, new Date(now)]);
+    if (request.rowCount !== 1) throw new Error('Accepted owner request could not be synchronized to expiry');
+    await client.query(`UPDATE authorization_records SET state='EXPIRED',updated_at=$2 WHERE order_id=$1 AND kind='ADDRESS_ALLOCATION' AND state='ISSUED'`, [row.order_id, new Date(now)]);
+    await this.audit(client, row.order_id, 'SYSTEM', undefined, 'ORDER_EXPIRED', { phase: 'ACCEPTED', allocation: 'NONE', sourcePaymentEvidence: false, payoutObligation: false });
+  }
   private async syncRequestStatus(client: PoolClient, orderId: string, status: PaymentOrder['status'], now: number): Promise<void> { await client.query('UPDATE public_order_requests SET status=$2,updated_at=$3 WHERE request_id=$1', [orderId, status === 'AWAITING_PAYMENT' ? 'PAYMENT_READY' : status, new Date(now)]); }
   private allocationOperation(record: { allocation_id: string; authorization_id: string; journal_phase: AddressAllocationPhase; encrypted_derivation: Buffer; encrypted_receiver: Buffer | null; rpc_attempt_count: number }, order: Pick<OrderRow, 'order_id' | 'accepted_by'>, operatorId: string): AddressAllocationOperation {
     if (order.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
@@ -539,7 +633,7 @@ export class PostgresSettlementStore {
       rpcAttemptCount: record.rpc_attempt_count, ...(receiver ? { address: receiver.receiver } : {}),
     };
   }
-  private async validateAcceptedOrder(client: PoolClient, order: OrderRow, operatorId: string, now: number): Promise<void> {
+  private async validateAcceptedOrder(client: PoolClient, order: OrderRow, operatorId: string, now: number, allowedRequestStatuses: string[] = ['ACCEPTED'], requireVerifiedProof = true): Promise<void> {
     if (order.accepted_by !== operatorId) throw new Error('Operator identity does not match the accepted order');
     const requestResult = await client.query<{ owner_session_hash: Buffer; owner_user_id: string; status: string; linked_order_id: string; immutable_terms: typeof PUBLIC_ROUTE_TERMS; expires_at: Date; destination_binding_version: number; intent_id: string; encrypted_intent: Buffer; consent_digest: Buffer; recipient_fingerprint: Buffer; manifest_fingerprint: Buffer; intent_status: string; proof_method: 'EIP712_EOA'|'ERC1271'; proof_digest: Buffer; proof_status: string }>(`SELECT r.owner_session_hash,r.owner_user_id,r.status,r.linked_order_id,r.immutable_terms,r.expires_at,r.destination_binding_version,
       d.intent_id,d.encrypted_intent,d.consent_digest,d.recipient_fingerprint,d.manifest_fingerprint,d.status AS intent_status,
@@ -547,7 +641,7 @@ export class PostgresSettlementStore {
       FROM public_order_requests r JOIN destination_intents d ON d.request_id=r.request_id JOIN destination_wallet_proofs p ON p.intent_id=d.intent_id
       WHERE r.request_id=$1 FOR UPDATE OF r,d,p`, [order.order_id]);
     const request = requestResult.rows[0]; const manifest = order.immutable_manifest.binding;
-    if (!request || request.status !== 'ACCEPTED' || request.linked_order_id !== order.order_id || !request.owner_session_hash.equals(order.owner_session_hash)) throw new Error('Accepted order owner or request binding is invalid');
+    if (!request || !allowedRequestStatuses.includes(request.status) || request.linked_order_id !== order.order_id || !request.owner_session_hash.equals(order.owner_session_hash)) throw new Error('Accepted order owner or request binding is invalid');
     if (order.immutable_manifest.requestId !== order.order_id || manifest.orderId !== order.order_id) throw new Error('Order manifest identity mismatch');
     if (request.destination_binding_version !== 2 || request.intent_status !== 'BOUND' || manifest.version !== 2 || !manifest.destinationIntent) throw new Error('Accepted order has no complete owner destination binding');
     const payload = this.encryption.decrypt<DestinationIntentPayload>(request.encrypted_intent, destinationIntentContext(request.intent_id)); assertDestinationPayload(payload);
@@ -555,8 +649,8 @@ export class PostgresSettlementStore {
     if (!request.consent_digest.equals(digestDestinationIntent(payload)) || !request.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))) throw new Error('Accepted order consent or recipient fingerprint does not match');
     if (!request.manifest_fingerprint.equals(destinationManifestFingerprint(order.immutable_manifest))) throw new Error('Accepted order manifest fingerprint does not match');
     const expectedVerification = request.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa';
-    this.assertProofMethodAllowed(request.proof_method);
-    if (request.proof_status !== 'VERIFIED' || manifest.destinationIntent.intentId !== request.intent_id || manifest.destinationIntent.ownerFingerprint !== ownerHash(request.owner_user_id).toString('hex') || manifest.destinationIntent.consentDigest !== request.consent_digest.toString('hex') || manifest.destinationIntent.walletControlVerification !== expectedVerification || manifest.destinationIntent.proofDigest !== request.proof_digest.toString('hex')) throw new Error('Accepted order manifest destination metadata does not match');
+    if (requireVerifiedProof) this.assertProofMethodAllowed(request.proof_method);
+    if ((requireVerifiedProof && request.proof_status !== 'VERIFIED') || manifest.destinationIntent.intentId !== request.intent_id || manifest.destinationIntent.ownerFingerprint !== ownerHash(request.owner_user_id).toString('hex') || manifest.destinationIntent.consentDigest !== request.consent_digest.toString('hex') || manifest.destinationIntent.walletControlVerification !== expectedVerification || manifest.destinationIntent.proofDigest !== request.proof_digest.toString('hex')) throw new Error('Accepted order manifest destination metadata does not match');
     if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order route terms do not match the immutable destination request');
     validateOperatorOrderBinding(manifest, now);
   }
