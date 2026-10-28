@@ -79,11 +79,15 @@ test('TEST-ONLY wallet-control challenges are owner/session bound, expiring, sin
   const session={userId:owner,displayName:'Owner',csrfToken:'c'.repeat(64),passkeyCount:1,sessionToken:'a'.repeat(64)};
   const stranger={...session,userId:other,sessionToken:'b'.repeat(64)};
   await assert.rejects(service.issue(stranger,request.id,'https://zecathon.example'),/not found/);
+  const superseded=await service.issue(session,request.id,'https://zecathon.example');
   const challenge=await service.issue(session,request.id,'https://zecathon.example');
+  const supersededSignature=await account.signTypedData(superseded.typedData as Parameters<typeof account.signTypedData>[0]);
+  await assert.rejects(service.verify(session,superseded.challengeId,supersededSignature,'https://zecathon.example'),/already used|invalid/);
   const signed=await account.signTypedData(challenge.typedData as Parameters<typeof account.signTypedData>[0]);
   const attempts=await Promise.allSettled([service.verify(session,challenge.challengeId,signed,'https://zecathon.example'),service.verify(session,challenge.challengeId,signed,'https://zecathon.example')]);
   assert.equal(attempts.filter(item=>item.status==='fulfilled').length,1); assert.equal(attempts.filter(item=>item.status==='rejected').length,1);
   assert.equal((await requests.get(owner,request.id))?.destinationBinding.walletControlVerification,'verified-eoa');
+  await assert.rejects(service.issue(session,request.id,'https://zecathon.example'),/already verified/);
   await assert.rejects(service.verify(stranger,challenge.challengeId,signed,'https://zecathon.example'),/another session|already used/);
   await assert.rejects(pool.query(`UPDATE destination_wallet_proofs SET owner_user_id=$2 WHERE intent_id=$1`,[challenge.intentId,other]),/immutable/);
   await assert.rejects(pool.query(`UPDATE destination_wallet_audit_events SET details='{}'::jsonb WHERE intent_id=$1`,[challenge.intentId]),/append-only/);
@@ -134,7 +138,7 @@ test('PostgreSQL migration, concurrent request idempotency, restart persistence,
   const restartedPool = createPostgresPool(databaseUrl);
   const restartedStore = new PostgresPublicOrderRequestStore(restartedPool, encryption);
   assert.equal((await restartedStore.get(owner, id))?.destinationBinding.status, 'confirmed');
-  assert.ok(!JSON.stringify(await restartedStore.get(owner, id)).includes(recipient));
+  assert.equal((await restartedStore.get(owner, id))?.destinationReview?.recipient.toLowerCase(), recipient.toLowerCase(), 'the owner can recover the exact reviewed recipient after restart');
 
   const orderId = randomUUID(); const now = new Date(); const later = new Date(now.getTime() + 3_600_000);
   await restartedPool.query(`INSERT INTO orders
@@ -163,7 +167,7 @@ test('TEST-ONLY two accounts retain distinct immutable encrypted destinations ac
   });
   await assert.rejects(pool.query(`UPDATE public_order_requests SET owner_user_id=$2 WHERE request_id=$1`, [requestA.id, ownerB]), /foreign key|constraint/i);
   assert.equal((await store.get(ownerA, requestA.id))?.paymentInstructions, undefined, 'acceptance alone cannot publish a payment receiver');
-  assert.equal((await store.get(ownerA, requestA.id))?.destinationReview, undefined, 'the exact recipient stays encrypted until payment instructions are published');
+  assert.equal((await store.get(ownerA, requestA.id))?.destinationReview?.recipient.toLowerCase(), addressA, 'the exact recipient is decrypted only into the owner-scoped review response');
   const restartedPool = createPostgresPool(databaseUrl); const restarted = new PostgresPublicOrderRequestStore(restartedPool, encryption);
   assert.equal((await restarted.get(ownerA, requestA.id))?.destinationBinding.status, 'bound'); await restartedPool.end();
 });

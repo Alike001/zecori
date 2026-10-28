@@ -77,8 +77,11 @@ export class MemoryPublicOrderRequestStore implements PublicOrderRequestStore {
 }
 
 function publicClone(request: PublicOrderRequest & { ownerId?: string; privateIntent?: DestinationIntentPayload }): PublicOrderRequest {
-  const { ownerId: _ownerId, privateIntent: _privateIntent, ...visible } = request;
-  return structuredClone(visible);
+  const { ownerId: _ownerId, privateIntent, ...visible } = request;
+  return structuredClone({
+    ...visible,
+    ...(privateIntent ? { destinationReview: { recipient: privateIntent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
+  });
 }
 
 function ownerHash(ownerId: string): Buffer {
@@ -103,7 +106,7 @@ function fromRow(row: RequestRow, encryption?: DataEncryption): PublicOrderReque
   return {
     id: row.request_id, status: row.status, createdAt: row.created_at.toISOString(), expiresAt: row.expires_at.toISOString(),
     terms: PUBLIC_ROUTE_TERMS,
-    ...(instructions && intent ? { destinationReview: { recipient: intent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
+    ...(intent ? { destinationReview: { recipient: intent.destination.address, network: 'base-sepolia' as const, chainId: 84532 as const, asset: 'USDC' as const, contract: BASE_USDC, amountAtomic: '1000000' as const } } : {}),
     destinationBinding: row.destination_binding_version === 2 && row.intent_status
       ? { status: row.intent_status.toLowerCase() as 'confirmed' | 'bound' | 'expired' | 'revoked', ...(row.consent_confirmed_at ? { consentConfirmedAt: row.consent_confirmed_at.toISOString() } : {}), walletControlVerification: row.proof_status === 'VERIFIED' ? (row.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eoa') : 'unverified', ...(row.proof_status === 'VERIFIED' && row.proof_verified_at ? { verifiedAt: row.proof_verified_at.toISOString() } : {}) }
       : { status: 'legacy-unverified', walletControlVerification: 'unverified' },

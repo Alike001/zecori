@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { inspectBaseReadOnlyProvider, inspectZcashReadOnlyAdapter, requestDestinationControlSignature, validateManualBaseRecipient } from './wallet-readiness.ts';
+import { inspectBaseReadOnlyProvider, inspectZcashReadOnlyAdapter, requestDestinationControlSignature, subscribeInjectedWalletProviders, validateManualBaseRecipient } from './wallet-readiness.ts';
 
 test('manual Base recipients require a complete non-zero address', () => {
   assert.equal(validateManualBaseRecipient('').code, 'NO_ACCOUNT');
@@ -43,4 +43,19 @@ test('destination signing is explicit and discards proofs after rejection, accou
   let accountCalls=0;
   await assert.rejects(requestDestinationControlSignature({request:async({method})=>{ if(method==='eth_requestAccounts')return [recipient]; if(method==='eth_chainId')return '0x14a34'; if(method==='eth_signTypedData_v4')return '0x1234'; if(method==='eth_accounts')return [`0x${'c'.repeat(40)}`]; accountCalls+=1; return []; }},recipient,{}),/changed/);
   assert.equal(accountCalls,0);
+  await assert.rejects(requestDestinationControlSignature({request:async({method})=>method==='eth_requestAccounts'?[recipient]:'0x1'},recipient,{}),/Base Sepolia/);
+  await assert.rejects(requestDestinationControlSignature({request:async({method})=>{if(method==='eth_requestAccounts'||method==='eth_accounts')return[recipient];if(method==='eth_chainId')return '0x1';if(method==='eth_signTypedData_v4')return `0x${'12'.repeat(65)}`;throw new Error('unexpected');}},recipient,{}),/Base Sepolia|changed/);
+});
+
+test('multiple injected providers remain distinct so MetaMask can be selected explicitly', () => {
+  const metamask = { isMetaMask: true, request: async () => [] };
+  const other = { request: async () => [] };
+  const events = new EventTarget() as EventTarget & { ethereum?: typeof metamask & { providers?: Array<typeof metamask | typeof other> } };
+  events.ethereum = Object.assign(metamask, { providers: [other, metamask] });
+  let found: Array<{ isMetaMask: boolean; provider: unknown }> = [];
+  const cleanup = subscribeInjectedWalletProviders(events as Parameters<typeof subscribeInjectedWalletProviders>[0], providers => { found = providers; });
+  assert.equal(found.length, 2);
+  assert.equal(found.filter(item => item.isMetaMask).length, 1);
+  assert.equal(found.find(item => item.isMetaMask)?.provider, metamask);
+  cleanup();
 });

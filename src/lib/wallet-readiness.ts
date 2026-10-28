@@ -16,9 +16,52 @@ export type ZcashReadOnlyAdapter = {
 
 export type Eip1193Provider = {
   request(arguments_: { method: string; params?: readonly unknown[] | object }): Promise<unknown>;
+  isMetaMask?: boolean;
+  providers?: Eip1193Provider[];
   on?(event: 'accountsChanged' | 'chainChanged' | 'disconnect', listener: (...arguments_: unknown[]) => void): void;
   removeListener?(event: 'accountsChanged' | 'chainChanged' | 'disconnect', listener: (...arguments_: unknown[]) => void): void;
 };
+
+export type InjectedWalletProvider = {
+  id: string;
+  name: string;
+  rdns?: string;
+  provider: Eip1193Provider;
+  isMetaMask: boolean;
+};
+
+type Eip6963ProviderDetail = {
+  info: { uuid: string; name: string; rdns: string };
+  provider: Eip1193Provider;
+};
+
+export function subscribeInjectedWalletProviders(
+  browser: Pick<Window, 'addEventListener' | 'removeEventListener' | 'dispatchEvent'> & { ethereum?: Eip1193Provider },
+  onChange: (providers: InjectedWalletProvider[]) => void,
+): () => void {
+  const discovered = new Map<Eip1193Provider, InjectedWalletProvider>();
+  const publish = () => onChange([...discovered.values()]);
+  const add = (provider: Eip1193Provider, detail?: Eip6963ProviderDetail) => {
+    const rdns = detail?.info.rdns;
+    discovered.set(provider, {
+      id: detail?.info.uuid ?? `legacy-${discovered.size + 1}`,
+      name: detail?.info.name ?? (provider.isMetaMask ? 'MetaMask' : `Injected wallet ${discovered.size + 1}`),
+      ...(rdns ? { rdns } : {}),
+      provider,
+      isMetaMask: rdns === 'io.metamask' || rdns === 'io.metamask.flask' || provider.isMetaMask === true,
+    });
+    publish();
+  };
+  const announced = (event: Event) => {
+    const detail = (event as CustomEvent<Eip6963ProviderDetail>).detail;
+    if (detail?.provider && detail.info?.uuid && detail.info?.name && detail.info?.rdns) add(detail.provider, detail);
+  };
+  browser.addEventListener('eip6963:announceProvider', announced as EventListener);
+  const legacy = browser.ethereum?.providers?.length ? browser.ethereum.providers : browser.ethereum ? [browser.ethereum] : [];
+  legacy.forEach(provider => add(provider));
+  browser.dispatchEvent(new Event('eip6963:requestProvider'));
+  return () => browser.removeEventListener('eip6963:announceProvider', announced as EventListener);
+}
 
 export type WalletReadiness = {
   ready: boolean;
