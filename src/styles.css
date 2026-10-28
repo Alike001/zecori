@@ -247,7 +247,10 @@ h1 em { color: var(--accent); font-family: Georgia, "Times New Roman", serif; fo
 .transcript-review small { color: var(--muted); line-height: 1.5; }
 
 .panel { border: 1px solid var(--line); background: var(--surface); border-radius: .65rem 1.5rem .65rem .65rem; padding: 1.7rem; margin-top: 2rem; }
-.panel-top { display: flex; justify-content: space-between; gap: 1rem; align-items: start; }
+.panel-top { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; align-items: start; }
+.panel-top > * { min-width: 0; }
+.request-card { min-width: 0; overflow-wrap: anywhere; }
+.request-card .status-chip { max-width: 100%; white-space: normal; text-align: center; }
 .request-id { display: grid; grid-template-columns: auto 1fr auto; gap: .8rem; align-items: center; background: #09130f; padding: .85rem; margin: 1rem 0; }
 .request-id span { color: var(--muted); font-size: .68rem; }
 .request-id code, .receipt code { overflow-wrap: anywhere; color: #c8d5ce; font-size: .72rem; }
@@ -264,6 +267,10 @@ h1 em { color: var(--accent); font-family: Georgia, "Times New Roman", serif; fo
 .payment-instructions dl>div { min-width:0; padding:.85rem; background:var(--surface); }
 .payment-instructions dt { color:var(--muted); font-size:.62rem; text-transform:uppercase; letter-spacing:.09em; }
 .payment-instructions dd { margin:.3rem 0 0; color:var(--soft); font-size:.73rem; line-height:1.5; overflow-wrap:anywhere; }
+.payment-countdown { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:.25rem 1rem; align-items:end; padding:.9rem 1rem; border:1px solid rgba(189,215,110,.45); background:rgba(189,215,110,.08); }
+.payment-countdown span { color:var(--soft); font-size:.68rem; text-transform:uppercase; letter-spacing:.08em; }
+.payment-countdown strong { color:#d8ea9e; font:700 clamp(1.35rem,5vw,2rem)/1 ui-monospace,SFMono-Regular,Menlo,monospace; font-variant-numeric:tabular-nums; }
+.payment-countdown small { grid-column:1/-1; color:var(--muted); }
 .receiver-panel { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:1rem; padding:1rem; border:1px solid rgba(128,146,62,.45); background:rgba(128,146,62,.08); }
 .receiver-copy { min-width:0; display:grid; align-content:start; gap:.7rem; }
 .receiver-copy>span { color:var(--muted); font-size:.64rem; text-transform:uppercase; letter-spacing:.1em; }
@@ -279,6 +286,10 @@ h1 em { color: var(--accent); font-family: Georgia, "Times New Roman", serif; fo
 .noir-payment-review .subtle-button { justify-self:start; }
 .live-flag { color: #bdd76e; font-size: .63rem; text-transform: uppercase; letter-spacing: .08em; }
 .inline-warning { display: flex; align-items: flex-start; gap: .55rem; color: var(--warning); font-size: .78rem; line-height: 1.5; margin: 1rem 0; }
+.destination-control-status { display:flex; align-items:flex-start; gap:.55rem; min-width:0; margin:1rem 0; color:#b9d57b; font-size:.78rem; line-height:1.5; }
+.destination-control-status svg { flex:0 0 auto; margin-top:.1rem; }
+.destination-control-status span { min-width:0; overflow-wrap:anywhere; }
+.payment-expired { border-color:var(--danger); color:#efb1a6; }
 .recovery-guidance { display: flex; align-items: flex-start; gap: .7rem; margin-top: 1rem; padding: 1rem; border: 1px solid var(--line); background: var(--surface-high); }
 .recovery-guidance svg { color: var(--accent); flex: 0 0 auto; margin-top: .1rem; }
 .recovery-guidance strong { display: block; }
@@ -592,6 +603,9 @@ summary { color: var(--soft); cursor: pointer; font-size: .78rem; font-weight: 6
   .receipt dl { grid-template-columns: 1fr; }
   .history-detail { grid-template-columns: 1fr; }
   .history-action, .verification-retry { align-items: stretch; flex-direction: column; }
+  .receiver-panel { grid-template-columns:minmax(0,1fr); }
+  .receiver-qr { justify-self:start; max-width:100%; }
+  .receiver-qr svg { max-width:100%; height:auto; }
   .public-header { height: 4.8rem; padding: 0 1rem; }
   .menu-toggle { display: inline-flex; }
   .public-nav { display: none; position: absolute; inset: 4.4rem 1rem auto; padding: 1rem; background: #101d18; border: 1px solid var(--line); box-shadow: 0 1rem 3rem #020805; align-items: stretch; }

@@ -17,6 +17,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { relayFingerprint, type SignedRelayEvidence } from './private-verification-protocol.ts';
 import { assertDestinationPayload, destinationIntentContext, destinationRecipientFingerprint, digestDestinationIntent, type DestinationIntentPayload } from './destination-intent.ts';
 import { BaseSepoliaWalletControlVerifier, proofContext, type WalletControlProof } from './wallet-control.ts';
+import { settlementDeadlinePolicy, type SettlementDeadlinePolicy } from './settlement-deadline-policy.ts';
 
 type SourceVerifier = (request: ZcashVerificationRequest) => ReturnType<typeof verifyZcashTransaction>;
 type DestinationVerifier = (request: Omit<BaseVerificationRequest, 'expectedSender'>) => ReturnType<typeof verifyBaseSepoliaTransaction>;
@@ -89,11 +90,14 @@ export class PostgresSettlementStore {
   private readonly pool: Pool;
   private readonly encryption: DataEncryption;
   private readonly walletVerifier?: BaseSepoliaWalletControlVerifier;
-  constructor(pool: Pool, encryption: DataEncryption, walletVerifier?: BaseSepoliaWalletControlVerifier) { this.pool = pool; this.encryption = encryption; this.walletVerifier = walletVerifier; }
+  private readonly deadlinePolicy: SettlementDeadlinePolicy;
+  constructor(pool: Pool, encryption: DataEncryption, walletVerifier?: BaseSepoliaWalletControlVerifier, deadlinePolicy = settlementDeadlinePolicy()) {
+    this.pool = pool; this.encryption = encryption; this.walletVerifier = walletVerifier; this.deadlinePolicy = deadlinePolicy;
+  }
 
   async health(): Promise<void> {
-    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control', '015_accepted_order_expiry']]);
-    if (result.rowCount !== 6) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, wallet-control, or accepted-expiry migration is missing');
+    const result = await this.pool.query("SELECT version FROM schema_migrations WHERE version = ANY($1::text[])", [['002_settlement_integration', '003_private_verification_relay', '004_crash_safe_address_allocation', '007_owner_destination_binding', '008_destination_wallet_control', '015_accepted_order_expiry', '016_separate_payment_deadline']]);
+    if (result.rowCount !== 7) throw new Error('Settlement, private relay, crash-safe allocation, destination-binding, wallet-control, accepted-expiry, or payment-deadline migration is missing');
   }
 
   async pendingRequests(now = Date.now()): Promise<PendingRequest[]> {
@@ -136,7 +140,8 @@ export class PostgresSettlementStore {
         || !request.owner_session_hash.equals(ownerHash(request.owner_user_id)) || !request.consent_digest.equals(digestDestinationIntent(payload))
         || !request.recipient_fingerprint.equals(destinationRecipientFingerprint(payload.destination.address))) throw new Error('Encrypted destination intent does not match its owner-scoped evidence');
       const destinationIntent = { intentId: request.intent_id, ownerFingerprint: ownerHash(request.owner_user_id).toString('hex'), consentDigest: request.consent_digest.toString('hex'), consentVersion: payload.consentVersion, walletControlVerification: request.proof_method === 'ERC1271' ? 'verified-erc1271' as const : 'verified-eip712-eoa' as const, proofDigest: request.proof_digest.toString('hex') };
-      const binding = createOperatorOrderBinding({ orderId: request.request_id, destinationRecipient: payload.destination.address, expiresAt: request.expires_at.toISOString(), destinationIntent, now });
+      const paymentDeadline = new Date(now + this.deadlinePolicy.shieldedPaymentWindowMs);
+      const binding = createOperatorOrderBinding({ orderId: request.request_id, destinationRecipient: payload.destination.address, expiresAt: paymentDeadline.toISOString(), destinationIntent, now });
       validateOperatorOrderBinding(binding, now);
       const signature = await signer(binding, operatorId);
       if (!/^[0-9a-f]{64}$/i.test(signature)) throw new Error('Signed operator manifest is invalid');
@@ -146,13 +151,13 @@ export class PostgresSettlementStore {
         VALUES ($1,$1,$2,$3,$4,$5,$6,$7,$8,'CREATED',$9,$10,$9)`, [
         requestId, request.owner_session_hash, { version: 2, requestId, binding }, Buffer.from(signature, 'hex'), operatorId,
         { id: requestId, createdAt: new Date(now).toISOString(), status: 'CREATED', expiresAt: binding.expiresAt },
-        this.encryption.encrypt(acceptedState, orderContext(requestId)), this.encryption.activeVersion, new Date(now), request.expires_at,
+        this.encryption.encrypt(acceptedState, orderContext(requestId)), this.encryption.activeVersion, new Date(now), paymentDeadline,
       ]);
       const manifestFingerprint = destinationManifestFingerprint({ requestId, binding });
       await client.query(`UPDATE destination_intents SET status='BOUND',bound_at=$2,manifest_fingerprint=$3 WHERE intent_id=$1 AND status='CONFIRMED'`, [request.intent_id, new Date(now), manifestFingerprint]);
       await client.query(`INSERT INTO destination_intent_events(intent_id,actor_type,actor_fingerprint,event_type,occurred_at,details) VALUES($1,'OPERATOR',$2,'INTENT_BOUND',$3,$4)`, [request.intent_id, fingerprint(operatorId), new Date(now), { requestId, manifestVersion: 2 }]);
       await client.query(`UPDATE public_order_requests SET status='ACCEPTED', linked_order_id=$1, accepted_at=$2, accepted_by=$3, manifest_signature=$4, updated_at=$2 WHERE request_id=$1`, [requestId, new Date(now), operatorId, Buffer.from(signature, 'hex')]);
-      await this.audit(client, requestId, 'OPERATOR', operatorId, 'PUBLIC_REQUEST_ACCEPTED', { requestId, manifestVersion: 2, destinationIntentId: request.intent_id, walletControlVerification: destinationIntent.walletControlVerification });
+      await this.audit(client, requestId, 'OPERATOR', operatorId, 'PUBLIC_REQUEST_ACCEPTED', { requestId, manifestVersion: 2, destinationIntentId: request.intent_id, walletControlVerification: destinationIntent.walletControlVerification, requestExpiredAt: request.expires_at.toISOString(), shieldedPaymentDeadline: paymentDeadline.toISOString() });
       await client.query('COMMIT');
       return { orderId: requestId, signature };
     } catch (error) { await client.query('ROLLBACK'); throw error; } finally { client.release(); }
@@ -651,7 +656,7 @@ export class PostgresSettlementStore {
     const expectedVerification = request.proof_method === 'ERC1271' ? 'verified-erc1271' : 'verified-eip712-eoa';
     if (requireVerifiedProof) this.assertProofMethodAllowed(request.proof_method);
     if ((requireVerifiedProof && request.proof_status !== 'VERIFIED') || manifest.destinationIntent.intentId !== request.intent_id || manifest.destinationIntent.ownerFingerprint !== ownerHash(request.owner_user_id).toString('hex') || manifest.destinationIntent.consentDigest !== request.consent_digest.toString('hex') || manifest.destinationIntent.walletControlVerification !== expectedVerification || manifest.destinationIntent.proofDigest !== request.proof_digest.toString('hex')) throw new Error('Accepted order manifest destination metadata does not match');
-    if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || request.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order route terms do not match the immutable destination request');
+    if (payload.destination.address.toLowerCase() !== manifest.destinationRecipient.toLowerCase() || order.expires_at.toISOString() !== manifest.expiresAt || !isDeepStrictEqual(request.immutable_terms, PUBLIC_ROUTE_TERMS)) throw new Error('Accepted order route terms or payment deadline do not match the immutable order');
     validateOperatorOrderBinding(manifest, now);
   }
 

@@ -175,17 +175,23 @@ test('TEST-ONLY two accounts retain distinct immutable encrypted destinations ac
 test('TEST-ONLY accepted unallocated expiry is atomic, guarded, idempotent, owner-visible, and audit-preserving', { skip: !databaseUrl }, async t => {
   const pool = createPostgresPool(databaseUrl); await migrateDatabase(pool); t.after(async () => pool.end());
   const encryption = new DataEncryption({ activeVersion: 41, keys: new Map([[41, randomBytes(32)]]) });
-  const requests = new PostgresPublicOrderRequestStore(pool, encryption); const settlements = new PostgresSettlementStore(pool, encryption);
+  const requests = new PostgresPublicOrderRequestStore(pool, encryption);
+  const settlements = new PostgresSettlementStore(pool, encryption, undefined, { shieldedPaymentWindowMs: 45 * 60_000 });
   const operatorId = 'accepted-expiry-integration'; const acceptedAt = Date.now();
 
   const owner = randomUUID(); const request = await createBoundRequest(requests, pool, owner, `0x${randomBytes(20).toString('hex')}`, acceptedAt);
   await settlements.acceptRequest(request.id, operatorId, async () => 'a'.repeat(64), acceptedAt + 1);
-  const before = await pool.query<{ immutable_manifest: Record<string, unknown>; state_version: string; count: string }>(`SELECT o.immutable_manifest,o.state_version,count(a.event_id)::text AS count
+  const acceptedView = await requests.get(owner, request.id, acceptedAt + 2);
+  assert.equal(acceptedView?.expiresAt, request.expiresAt, 'acceptance does not rewrite the request/quote expiry');
+  assert.equal(acceptedView?.paymentDeadline, new Date(acceptedAt + 1 + 45 * 60_000).toISOString());
+  const before = await pool.query<{ immutable_manifest: Record<string, unknown>; expires_at: Date; state_version: string; count: string }>(`SELECT o.immutable_manifest,o.expires_at,o.state_version,count(a.event_id)::text AS count
     FROM orders o JOIN audit_events a ON a.order_id=o.order_id WHERE o.order_id=$1 GROUP BY o.order_id`, [request.id]);
-  await assert.rejects(settlements.expire(request.id, Date.parse(request.expiresAt) - 1), /not expired/);
-  assert.equal((await requests.get(owner, request.id, Date.parse(request.expiresAt) - 1))?.status, 'ACCEPTED');
+  const paymentDeadline = Date.parse(acceptedView!.paymentDeadline!);
+  await assert.rejects(pool.query(`UPDATE orders SET expires_at=expires_at+interval '1 minute',state_version=state_version+1 WHERE order_id=$1`, [request.id]), /immutable order fields/);
+  await assert.rejects(settlements.expire(request.id, paymentDeadline - 1), /not expired/);
+  assert.equal((await requests.get(owner, request.id, paymentDeadline - 1))?.status, 'ACCEPTED');
 
-  const expiredAt = Date.parse(request.expiresAt) + 1;
+  const expiredAt = paymentDeadline + 1;
   await settlements.expire(request.id, expiredAt);
   const ownerView = await requests.get(owner, request.id, expiredAt);
   assert.equal(ownerView?.status, 'EXPIRED');
@@ -194,10 +200,11 @@ test('TEST-ONLY accepted unallocated expiry is atomic, guarded, idempotent, owne
   assert.equal(ownerView?.paymentInstructions, undefined);
   assert.match(ownerView?.timeline?.at(-1)?.type ?? '', /ORDER_EXPIRED/);
 
-  const after = await pool.query<{ status: string; immutable_manifest: Record<string, unknown>; public_view: Record<string, unknown>; encrypted_private_state: Buffer; state_version: string; count: string }>(`SELECT o.status,o.immutable_manifest,o.public_view,o.encrypted_private_state,o.state_version,count(a.event_id)::text AS count
+  const after = await pool.query<{ status: string; immutable_manifest: Record<string, unknown>; public_view: Record<string, unknown>; encrypted_private_state: Buffer; expires_at: Date; state_version: string; count: string }>(`SELECT o.status,o.immutable_manifest,o.public_view,o.encrypted_private_state,o.expires_at,o.state_version,count(a.event_id)::text AS count
     FROM orders o JOIN audit_events a ON a.order_id=o.order_id WHERE o.order_id=$1 GROUP BY o.order_id`, [request.id]);
   assert.equal(after.rows[0].status, 'EXPIRED');
   assert.deepEqual(after.rows[0].immutable_manifest, before.rows[0].immutable_manifest);
+  assert.equal(new Date(after.rows[0].expires_at).toISOString(), before.rows[0].expires_at.toISOString());
   assert.equal(Number(after.rows[0].state_version), Number(before.rows[0].state_version) + 1);
   assert.equal(Number(after.rows[0].count), Number(before.rows[0].count) + 1);
   assert.deepEqual(encryption.decrypt<Record<string, unknown>>(after.rows[0].encrypted_private_state, `order:${request.id}:private-state`), {
@@ -215,16 +222,18 @@ test('TEST-ONLY accepted unallocated expiry is atomic, guarded, idempotent, owne
   const authorizationId = await settlements.issueAuthorization(conflict.id, 'ADDRESS_ALLOCATION', operatorId, async () => 'c'.repeat(64), acceptedAt + 10_002, 60);
   const conflictDiversifier = (41_000_000_000_000_000_000n + BigInt(`0x${randomBytes(8).toString('hex')}`)).toString();
   await settlements.beginAddressAllocation(conflict.id, operatorId, authorizationId, conflictDiversifier, async () => undefined, acceptedAt + 10_003);
-  await assert.rejects(settlements.expire(conflict.id, Date.parse(conflict.expiresAt) + 1), /allocated or in-flight receiver/);
-  assert.equal((await requests.get(conflictOwner, conflict.id, Date.parse(conflict.expiresAt) + 1))?.status, 'ACCEPTED');
+  const conflictDeadline = Date.parse((await requests.get(conflictOwner, conflict.id))!.paymentDeadline!);
+  await assert.rejects(settlements.expire(conflict.id, conflictDeadline + 1), /allocated or in-flight receiver/);
+  assert.equal((await requests.get(conflictOwner, conflict.id, conflictDeadline + 1))?.status, 'ACCEPTED');
   assert.equal((await pool.query<{ status: string }>('SELECT status FROM orders WHERE order_id=$1', [conflict.id])).rows[0].status, 'CREATED');
 
   const fundedOwner = randomUUID(); const funded = await createBoundRequest(requests, pool, fundedOwner, `0x${randomBytes(20).toString('hex')}`, acceptedAt + 20_000);
   await settlements.acceptRequest(funded.id, operatorId, async () => 'd'.repeat(64), acceptedAt + 20_001);
   await pool.query(`INSERT INTO settlement_evidence(evidence_id,order_id,chain,reference_fingerprint,encrypted_evidence,encryption_key_version,independently_verified_at)
     VALUES($1,$2,'zcash-testnet',$3,$4,$5,$6)`, [randomUUID(), funded.id, randomBytes(32), randomBytes(64), encryption.activeVersion, new Date(acceptedAt + 20_002)]);
-  await assert.rejects(settlements.expire(funded.id, Date.parse(funded.expiresAt) + 1), /source-payment evidence/);
-  assert.equal((await requests.get(fundedOwner, funded.id, Date.parse(funded.expiresAt) + 1))?.status, 'ACCEPTED');
+  const fundedDeadline = Date.parse((await requests.get(fundedOwner, funded.id))!.paymentDeadline!);
+  await assert.rejects(settlements.expire(funded.id, fundedDeadline + 1), /source-payment evidence/);
+  assert.equal((await requests.get(fundedOwner, funded.id, fundedDeadline + 1))?.status, 'ACCEPTED');
   assert.equal((await pool.query<{ status: string }>('SELECT status FROM orders WHERE order_id=$1', [funded.id])).rows[0].status, 'CREATED');
 });
 
